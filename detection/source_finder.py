@@ -554,3 +554,120 @@ def filter_sources(sources, min_snr=3.0, min_flux=None, max_sources=None, exclud
         return None
     
     return filtered
+
+def score_candidate(candidate, original_images, shifts, search_radius=5):
+    """
+    Score a KBO candidate based on its appearance in the original images
+    
+    Parameters:
+    -----------
+    candidate : dict
+        Candidate object with position and other properties
+    original_images : list
+        List of original unstacked images
+    shifts : list
+        List of (dx, dy) shifts for each image to follow the candidate's motion
+    search_radius : int
+        Radius around expected position to search in pixels
+    
+    Returns:
+    --------
+    float : Score between 0 and 1
+    """
+    # Extract candidate position
+    x_center = candidate['xcentroid']
+    y_center = candidate['ycentroid']
+    
+    # Initialize scoring metrics
+    detection_count = 0
+    snr_values = []
+    position_errors = []
+    
+    # Check each original image
+    for i, image in enumerate(original_images):
+        # Get the expected position in this image by applying the inverse shift
+        dx, dy = shifts[i]
+        expected_x = x_center + dx
+        expected_y = y_center + dy
+        
+        # Skip if the expected position is outside the image
+        if (expected_x < 0 or expected_x >= image.shape[1] or
+            expected_y < 0 or expected_y >= image.shape[0]):
+            continue
+        
+        # Extract a small region around the expected position
+        x_min = max(0, int(expected_x - search_radius))
+        x_max = min(image.shape[1], int(expected_x + search_radius + 1))
+        y_min = max(0, int(expected_y - search_radius))
+        y_max = min(image.shape[0], int(expected_y + search_radius + 1))
+        
+        region = image[y_min:y_max, x_min:x_max]
+        
+        # Skip if region is all NaN
+        if np.all(np.isnan(region)):
+            continue
+        
+        # Calculate statistics for the region
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            bg_median = np.nanmedian(region)
+            bg_std = np.nanstd(region)
+        
+        # Get the value at the expected position
+        expected_x_local = expected_x - x_min
+        expected_y_local = expected_y - y_min
+        
+        # Find the maximum value near the expected position
+        # Use a small window to find the brightest pixel
+        window_radius = min(2, search_radius)
+        window_x_min = max(0, int(expected_x_local - window_radius))
+        window_x_max = min(region.shape[1], int(expected_x_local + window_radius + 1))
+        window_y_min = max(0, int(expected_y_local - window_radius))
+        window_y_max = min(region.shape[0], int(expected_y_local + window_radius + 1))
+        
+        window = region[window_y_min:window_y_max, window_x_min:window_x_max]
+        
+        if np.any(~np.isnan(window)):
+            # Find the brightest non-NaN pixel
+            max_value = np.nanmax(window)
+            brightest_idx = np.nanargmax(window)
+            brightest_y, brightest_x = np.unravel_index(brightest_idx, window.shape)
+            
+            # Calculate position relative to expected position
+            pos_error = np.sqrt(
+                (brightest_x + window_x_min - expected_x_local)**2 + 
+                (brightest_y + window_y_min - expected_y_local)**2
+            )
+            
+            # Calculate SNR
+            snr = (max_value - bg_median) / bg_std if bg_std > 0 else 0
+            
+            # Count as detection if SNR is high enough and position error is small
+            if snr > 2.0 and pos_error < search_radius * 0.8:
+                detection_count += 1
+                snr_values.append(snr)
+                position_errors.append(pos_error)
+    
+    # Calculate final score based on multiple metrics
+    if detection_count == 0:
+        return 0.0
+    
+    # Detection fraction (how many images contain the object)
+    detection_fraction = detection_count / len(original_images)
+    
+    # Average SNR of detections
+    avg_snr = np.mean(snr_values) if snr_values else 0
+    snr_score = min(1.0, avg_snr / 10.0)  # Cap at SNR=10
+    
+    # Position consistency (lower is better)
+    avg_pos_error = np.mean(position_errors) if position_errors else search_radius
+    pos_score = 1.0 - (avg_pos_error / search_radius)
+    
+    # Combined score with weightings
+    score = (
+        0.5 * detection_fraction +  # 50% weight for detection rate
+        0.3 * snr_score +           # 30% weight for signal strength
+        0.2 * pos_score             # 20% weight for position consistency
+    )
+    
+    return max(0.0, min(1.0, score))  # Ensure score is between 0 and 1

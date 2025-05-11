@@ -10,8 +10,8 @@ import numpy as np
 from scipy import ndimage
 import warnings
 
-# Remove this import to prevent circular imports
-# from .source_finder import detect_sources, filter_sources
+# Don't import from source_finder here to avoid circular imports
+# Instead, we'll import it inside the process_motion_vector function
 
 def apply_shift(image, dx, dy, order=1, mode='constant', cval=np.nan):
     """
@@ -421,3 +421,49 @@ def filter_sources(sources, min_snr=3.0, min_flux=None, max_sources=None, exclud
         return None
     
     return filtered
+
+def process_motion_vector(images, base_shifts, motion_vector, method='mean', detection_threshold=5.0):
+    """
+    Process a single motion vector on a set of images
+    
+    Parameters:
+    -----------
+    images : list
+        List of 2D image arrays
+    base_shifts : list
+        List of (dx, dy) base shifts for each image (e.g. from initial alignment)
+    motion_vector : tuple
+        (dx, dy) motion vector to test, in pixels per image
+    method : str
+        Stacking method: 'mean', 'median', 'sum', or 'weighted_mean'
+    detection_threshold : float
+        Threshold for source detection in sigma
+    
+    Returns:
+    --------
+    tuple
+        (stacked_image, detected_sources, shifts_applied)
+    """
+    # Calculate shifts for this motion vector
+    # First shift is always (0,0) for the reference image
+    shifts = [base_shifts[0]]
+    
+    # For the remaining images, calculate shift based on motion vector and index
+    for i in range(1, len(images)):
+        dx = base_shifts[i][0] - (i * motion_vector[0])
+        dy = base_shifts[i][1] - (i * motion_vector[1])
+        shifts.append((dx, dy))
+    
+    # Stack the images with these shifts
+    stacked = stack_images(images, shifts, method=method)
+    
+    # Import here to avoid circular imports
+    try:
+        from detection.source_finder import detect_sources
+        sources = detect_sources(stacked, threshold=detection_threshold)
+    except ImportError:
+        # If we can't import source_finder, continue without source detection
+        sources = None
+    
+    return stacked, sources, shifts
+
