@@ -10,6 +10,7 @@ This script coordinates the KBO detection process by:
 5. Saving and visualizing the results
 """
 
+import math
 import os
 import sys
 import json
