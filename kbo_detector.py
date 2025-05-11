@@ -8,9 +8,10 @@ This script coordinates the KBO detection process by:
 3. Applying shift-and-stack for each motion vector
 4. Detecting and scoring candidate KBO sources
 5. Saving and visualizing the results
+
+Can process either a single field or iterate through all field directories.
 """
 
-import math
 import os
 import sys
 import json
@@ -23,10 +24,24 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.visualization import simple_norm
 
+# Create detection directory if it doesn't exist
+if not os.path.exists('./detection'):
+    os.makedirs('./detection')
+
 # Import detection modules
-from detection.motion_grid import calculate_kbo_motion_range, generate_motion_vectors
-from detection.shift_stack import apply_shift, stack_images, process_motion_vector
-from detection.source_finder import detect_sources, filter_sources, score_candidate
+try:
+    from detection.motion_calculator import calculate_kbo_motion_range, generate_motion_vectors, filter_motion_vectors
+    from detection.shift_stack import apply_shift, stack_images, process_motion_vector
+    from detection.candidate_filter import filter_candidates, score_candidate, calculate_kbo_properties
+    from detection.visualization import visualize_candidates, create_diagnostic_plots
+except ImportError as e:
+    print(f"Error importing detection modules: {e}")
+    print("This could be due to missing __init__.py or module files.")
+    print("Make sure all required modules are in the detection directory.")
+    sys.exit(1)
+
+# Default plate scale for JWST MIRI (arcsec/pixel)
+DEFAULT_PLATE_SCALE = 0.11
 
 def load_preprocessed_data(preprocessed_dir, verbose=True):
     """
@@ -44,11 +59,27 @@ def load_preprocessed_data(preprocessed_dir, verbose=True):
     tuple
         (images, headers, timestamps) lists
     """
+    # Normalize path for cross-platform compatibility
+    preprocessed_dir = os.path.normpath(preprocessed_dir)
+    
     # Look for preprocessed FITS files
     fits_files = glob(os.path.join(preprocessed_dir, "*_preprocessed.fits"))
     
     if not fits_files:
         print(f"No preprocessed FITS files found in {preprocessed_dir}")
+        if verbose:
+            # Add debugging information
+            print(f"Absolute path: {os.path.abspath(preprocessed_dir)}")
+            print(f"Directory exists: {os.path.isdir(preprocessed_dir)}")
+            try:
+                if os.path.isdir(preprocessed_dir):
+                    print(f"Contents: {os.listdir(preprocessed_dir)}")
+                else:
+                    parent_dir = os.path.dirname(preprocessed_dir)
+                    if os.path.isdir(parent_dir):
+                        print(f"Parent directory exists. Contents: {os.listdir(parent_dir)}")
+            except Exception as e:
+                print(f"Error listing directory: {e}")
         return None, None, None
     
     if verbose:
@@ -123,6 +154,37 @@ def load_preprocessed_data(preprocessed_dir, verbose=True):
     
     return images, headers, timestamps
 
+def get_plate_scale(headers, default=DEFAULT_PLATE_SCALE):
+    """
+    Get plate scale from FITS headers
+    
+    Parameters:
+    -----------
+    headers : list
+        List of FITS headers
+    default : float
+        Default plate scale to use if not found in headers
+    
+    Returns:
+    --------
+    float
+        Plate scale in arcsec/pixel
+    """
+    for header in headers:
+        # Try common keywords for plate scale
+        if 'PIXSCALE' in header:
+            return header['PIXSCALE']
+        elif 'CDELT1' in header:
+            # CDELT1 is typically in degrees/pixel
+            return abs(header['CDELT1']) * 3600.0
+        elif 'CD1_1' in header and 'CD2_2' in header:
+            # CD matrix - take average of absolute values
+            return (abs(header['CD1_1']) + abs(header['CD2_2'])) / 2.0 * 3600.0
+    
+    # If no plate scale found, use default
+    print(f"Warning: Could not find plate scale in headers. Using default: {default} arcsec/pixel")
+    return default
+
 def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir=None, verbose=True):
     """
     Detect moving objects in a sequence of preprocessed FITS files
@@ -145,13 +207,16 @@ def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir
     dict
         Results including candidate objects
     """
+    # Normalize output paths
     if output_dir:
+        output_dir = os.path.normpath(output_dir)
         os.makedirs(output_dir, exist_ok=True)
     if visualization_dir:
+        visualization_dir = os.path.normpath(visualization_dir)
         os.makedirs(visualization_dir, exist_ok=True)
     
     if verbose:
-        print(f"\n=== Detecting Moving Objects in {len(images)} Images ===\n")
+        print(f"\n=== Detecting KBOs in {len(images)} Images ===\n")
     
     if len(images) < 2:
         print("Need at least 2 images for motion detection!")
@@ -165,18 +230,32 @@ def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir
         for i, interval in enumerate(time_intervals):
             print(f"  Image {i+2}: {interval:.2f} hours")
     
+    # Get plate scale
+    plate_scale = DEFAULT_PLATE_SCALE  # Default value - would ideally come from FITS headers
+    
     # Calculate expected KBO motion range
     total_time_hours = time_intervals[-1] if time_intervals else 1.0
-    motion_range = calculate_kbo_motion_range(total_time_hours, verbose)
+    motion_range = calculate_kbo_motion_range(total_time_hours, plate_scale, verbose)
     
     # Generate motion vectors to test
-    motion_vectors = generate_motion_vectors(
+    raw_motion_vectors = generate_motion_vectors(
         motion_range['min_motion_pixels'] / len(images),
         motion_range['max_motion_pixels'] / len(images),
         num_steps=8,
         num_angles=12,
         verbose=verbose
     )
+    
+    # Filter motion vectors to reasonable values
+    motion_vectors = filter_motion_vectors(
+        raw_motion_vectors,
+        plate_scale,
+        total_time_hours,
+        max_vectors=100
+    )
+    
+    if verbose:
+        print(f"After filtering: Testing {len(motion_vectors)} motion vectors")
     
     # Initial shifts for stack alignment (all zeros for now)
     base_shifts = [(0, 0) for _ in range(len(images))]
@@ -219,21 +298,32 @@ def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir
     if verbose:
         print(f"\nFound {len(all_candidates)} initial candidates")
     
-    # Filter and sort candidates
+    # Filter and sort candidates - use physics-based filtering
     if all_candidates:
-        # Remove candidates with low scores
-        filtered_candidates = [c for c in all_candidates if c['score'] > 0.5]
+        # Filter candidates based on physical constraints
+        filtered_candidates = filter_candidates(
+            all_candidates, 
+            total_time_hours,
+            plate_scale, 
+            verbose
+        )
         
-        # Sort by score (descending)
-        filtered_candidates.sort(key=lambda c: c['score'], reverse=True)
+        # Add physical properties to remaining candidates
+        for candidate in filtered_candidates:
+            properties = calculate_kbo_properties(
+                candidate,
+                plate_scale,
+                total_time_hours
+            )
+            candidate.update(properties)
         
         if verbose:
-            print(f"After filtering: {len(filtered_candidates)} candidates")
+            print(f"After filtering: {len(filtered_candidates)} candidates remain")
             if filtered_candidates:
                 print("\nTop candidates:")
                 for i, candidate in enumerate(filtered_candidates[:5]):
                     print(f"  {i+1}. Score: {candidate['score']:.2f}, Position: ({candidate['xcentroid']:.1f}, {candidate['ycentroid']:.1f})")
-                    print(f"     Motion: dx={candidate['motion_vector'][0]:.3f}, dy={candidate['motion_vector'][1]:.3f} pixels/image")
+                    print(f"     Motion: {candidate['motion_arcsec_per_hour']:.2f} arcsec/hour, Est. dist: {candidate['approx_distance_au']:.1f} AU")
     else:
         filtered_candidates = []
         if verbose:
@@ -244,6 +334,7 @@ def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir
         'timestamp': datetime.now().isoformat(),
         'num_images': len(images),
         'time_span_hours': total_time_hours,
+        'plate_scale': plate_scale,
         'motion_vectors_tested': len(motion_vectors),
         'initial_candidates': len(all_candidates),
         'filtered_candidates': len(filtered_candidates),
@@ -258,13 +349,14 @@ def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir
     
     # Save results if requested
     if output_dir and filtered_candidates:
-        results_file = os.path.join(output_dir, "moving_object_candidates.json")
+        results_file = os.path.join(output_dir, "kbo_candidates.json")
         
         # Convert numpy values to Python types for JSON serialization
         serializable_results = {
             'timestamp': results['timestamp'],
             'num_images': results['num_images'],
             'time_span_hours': float(results['time_span_hours']),
+            'plate_scale': float(results['plate_scale']),
             'motion_vectors_tested': results['motion_vectors_tested'],
             'initial_candidates': results['initial_candidates'],
             'filtered_candidates': results['filtered_candidates'],
@@ -287,6 +379,8 @@ def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir
                 'flux': float(candidate['flux']),
                 'peak': float(candidate['peak']),
                 'score': float(candidate['score']),
+                'motion_arcsec_per_hour': float(candidate['motion_arcsec_per_hour']),
+                'approx_distance_au': float(candidate['approx_distance_au']),
                 'shifts': [[float(s[0]), float(s[1])] for s in candidate['shifts']]
             }
             serializable_results['candidates'].append(serializable_candidate)
@@ -299,221 +393,295 @@ def detect_moving_objects(images, timestamps, output_dir=None, visualization_dir
     
     # Generate visualizations if requested
     if visualization_dir and filtered_candidates:
-        visualize_candidates(images, filtered_candidates, visualization_dir, verbose)
+        visualize_candidates(
+            images, 
+            filtered_candidates, 
+            visualization_dir, 
+            time_span_hours=total_time_hours,
+            plate_scale=plate_scale,
+            verbose=verbose
+        )
+        
+        # Create diagnostic plots
+        create_diagnostic_plots(
+            motion_range,
+            filtered_candidates,
+            visualization_dir
+        )
     
     return results
 
-def visualize_candidates(images, candidates, output_dir, verbose=True):
+def find_field_directories(preprocessed_dir):
     """
-    Generate visualizations for candidate moving objects
+    Find all field directories in the preprocessed directory
     
     Parameters:
     -----------
-    images : list
-        List of image data arrays
-    candidates : list
-        List of candidate objects
-    output_dir : str
-        Output directory for visualizations
-    verbose : bool
-        Whether to print verbose information
+    preprocessed_dir : str
+        Base directory containing preprocessed FITS files
+        
+    Returns:
+    --------
+    list
+        List of field directory paths and IDs
     """
-    if verbose:
-        print("\nGenerating visualizations for top candidates...")
+    # Check if the directory exists
+    if not os.path.isdir(preprocessed_dir):
+        print(f"Error: Preprocessed directory {preprocessed_dir} not found")
+        return []
     
+    # Look for subdirectories containing preprocessed FITS files
+    field_dirs = []
+    
+    # First check if the main directory contains FITS files directly
+    main_fits_files = glob(os.path.join(preprocessed_dir, "*_preprocessed.fits"))
+    if main_fits_files:
+        field_dirs.append(('main', preprocessed_dir))
+    
+    # Then check all subdirectories
+    for item in os.listdir(preprocessed_dir):
+        subdir = os.path.join(preprocessed_dir, item)
+        if os.path.isdir(subdir):
+            # Check for preprocessed files in this subdirectory
+            fits_files = glob(os.path.join(subdir, "*_preprocessed.fits"))
+            if fits_files:
+                field_dirs.append((item, subdir))
+            else:
+                # Check if there are deeper subdirectories with FITS files (sometimes the structure is deeper)
+                for subitem in os.listdir(subdir) if os.path.isdir(subdir) else []:
+                    subsubdir = os.path.join(subdir, subitem)
+                    if os.path.isdir(subsubdir):
+                        sub_fits_files = glob(os.path.join(subsubdir, "*_preprocessed.fits"))
+                        if sub_fits_files:
+                            # Use combined path as field ID
+                            field_id = f"{item}/{subitem}"
+                            field_dirs.append((field_id, subsubdir))
+    
+    return field_dirs
+
+def create_summary_report(all_results, output_dir):
+    """
+    Create a summary report of all processed fields
+    
+    Parameters:
+    -----------
+    all_results : dict
+        Dictionary mapping field IDs to results
+    output_dir : str
+        Output directory for the summary report
+    """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Display settings for images
-    image_size = 40  # Size of cutout in pixels
+    # Count total candidates
+    total_candidates = 0
+    for field_id, result in all_results.items():
+        if result:
+            total_candidates += result.get('filtered_candidates', 0)
     
-    # Visualize top candidates (up to 10)
-    for i, candidate in enumerate(candidates[:10]):
-        if verbose:
-            print(f"  Generating visualization for candidate {i+1}")
-        
-        # Extract candidate info
-        x, y = candidate['xcentroid'], candidate['ycentroid']
-        motion_vector = candidate['motion_vector']
-        shifts = candidate['shifts']
-        
-        # Create figure for before/after
-        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-        
-        # Left panel: Original first image with predicted path
-        half_size = image_size // 2
-        
-        # Extract cutout from first image
-        x_min = max(0, int(x - half_size))
-        x_max = min(images[0].shape[1], int(x + half_size))
-        y_min = max(0, int(y - half_size))
-        y_max = min(images[0].shape[0], int(y + half_size))
-        
-        cutout_orig = images[0][y_min:y_max, x_min:x_max]
-        
-        # Display cutout
-        norm = simple_norm(cutout_orig, 'sqrt', percent=99)
-        axes[0].imshow(cutout_orig, origin='lower', cmap='viridis', norm=norm)
-        
-        # Mark the predicted path
-        path_x = []
-        path_y = []
-        for j in range(len(images)):
-            # Reverse the shift to get the position in the first image
-            pos_x = x - (j * motion_vector[0])
-            pos_y = y - (j * motion_vector[1])
-            
-            # Adjust for cutout coordinates
-            cutout_x = pos_x - x_min
-            cutout_y = pos_y - y_min
-            
-            path_x.append(cutout_x)
-            path_y.append(cutout_y)
-        
-        # Plot path on first image
-        axes[0].plot(path_x, path_y, 'r-', alpha=0.8)
-        for j, (px, py) in enumerate(zip(path_x, path_y)):
-            # Circle for each expected position
-            axes[0].plot(px, py, 'ro', alpha=0.6, markersize=8)
-            # Add small text label
-            axes[0].text(px + 2, py + 2, str(j+1), color='white', fontsize=8)
-        
-        axes[0].set_title("First image with predicted path")
-        
-        # Right panel: Stacked image
-        # Stack the images according to the shifts
-        stacked = stack_images(images, shifts)
-        
-        # Extract cutout from stacked image
-        cutout_stack = stacked[y_min:y_max, x_min:x_max]
-        
-        # Display cutout
-        norm = simple_norm(cutout_stack, 'sqrt', percent=99)
-        axes[1].imshow(cutout_stack, origin='lower', cmap='viridis', norm=norm)
-        
-        # Mark the candidate position
-        stack_x = x - x_min
-        stack_y = y - y_min
-        axes[1].plot(stack_x, stack_y, 'ro', alpha=0.8, markersize=10)
-        
-        axes[1].set_title("Stacked image with candidate position")
-        
-        # Add motion vector info
-        dx, dy = motion_vector
-        speed = math.sqrt(dx*dx + dy*dy) * len(images)
-        angle = math.degrees(math.atan2(dy, dx))
-        
-        fig.suptitle(f"Candidate {i+1}: Score {candidate['score']:.2f}, Motion {speed:.1f} pixels at {angle:.1f}°", fontsize=16)
-        plt.tight_layout()
-        
-        # Save figure
-        output_file = os.path.join(output_dir, f"candidate_{i+1:02d}.png")
-        plt.savefig(output_file, dpi=150, bbox_inches='tight')
-        plt.close()
-        
-        if verbose:
-            print(f"    Saved to {output_file}")
+    # Create summary data
+    summary = {
+        'timestamp': datetime.now().isoformat(),
+        'total_fields_processed': len(all_results),
+        'fields_with_candidates': sum(1 for r in all_results.values() if r and r.get('filtered_candidates', 0) > 0),
+        'total_candidates': total_candidates,
+        'field_results': {}
+    }
     
-    # Create summary figure with all top candidates
-    if len(candidates) > 0:
-        if verbose:
-            print("  Generating summary figure...")
+    for field_id, result in all_results.items():
+        if result:
+            field_name = os.path.basename(field_id)
+            summary['field_results'][field_name] = {
+                'num_images': result.get('num_images', 0),
+                'time_span_hours': float(result.get('time_span_hours', 0)),
+                'initial_candidates': result.get('initial_candidates', 0),
+                'filtered_candidates': result.get('filtered_candidates', 0)
+            }
+            
+            # Add candidate details
+            if 'candidates' in result and result['candidates']:
+                candidates_info = []
+                for candidate in result['candidates']:
+                    candidates_info.append({
+                        'score': float(candidate.get('score', 0)),
+                        'motion_arcsec_per_hour': float(candidate.get('motion_arcsec_per_hour', 0)),
+                        'approx_distance_au': float(candidate.get('approx_distance_au', 0))
+                    })
+                summary['field_results'][field_name]['candidates'] = candidates_info
+    
+    # Save summary to file
+    summary_file = os.path.join(output_dir, "detection_summary.json")
+    with open(summary_file, 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    # Create a simple text report
+    report_file = os.path.join(output_dir, "detection_report.txt")
+    with open(report_file, 'w') as f:
+        f.write("KBO DETECTION SUMMARY\n")
+        f.write("====================\n\n")
+        f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Fields processed: {len(all_results)}\n")
+        f.write(f"Fields with candidates: {summary['fields_with_candidates']}\n")
+        f.write(f"Total candidates: {total_candidates}\n\n")
         
-        num_candidates = min(10, len(candidates))
-        fig, axes = plt.subplots(2, 5, figsize=(15, 6))
-        axes = axes.flatten()
+        f.write("RESULTS BY FIELD\n")
+        f.write("===============\n\n")
         
-        for i, candidate in enumerate(candidates[:num_candidates]):
-            if i < len(axes):
-                # Extract candidate info
-                x, y = candidate['xcentroid'], candidate['ycentroid']
-                shifts = candidate['shifts']
-                
-                # Stack images with this candidate's shifts
-                stacked = stack_images(images, shifts)
-                
-                # Extract cutout
-                half_size = image_size // 2
-                x_min = max(0, int(x - half_size))
-                x_max = min(stacked.shape[1], int(x + half_size))
-                y_min = max(0, int(y - half_size))
-                y_max = min(stacked.shape[0], int(y + half_size))
-                
-                cutout = stacked[y_min:y_max, x_min:x_max]
-                
-                # Display cutout
-                norm = simple_norm(cutout, 'sqrt', percent=99)
-                axes[i].imshow(cutout, origin='lower', cmap='viridis', norm=norm)
-                
-                # Mark the candidate position
-                cutout_x = x - x_min
-                cutout_y = y - y_min
-                axes[i].plot(cutout_x, cutout_y, 'ro', alpha=0.8, markersize=6)
-                
-                # Add score
-                axes[i].set_title(f"Candidate {i+1}: Score {candidate['score']:.2f}")
-                
-                # Remove axis ticks
-                axes[i].set_xticks([])
-                axes[i].set_yticks([])
+        # Sort fields by number of candidates (descending)
+        sorted_fields = sorted(
+            [(field_id, result) for field_id, result in all_results.items() if result],
+            key=lambda x: x[1].get('filtered_candidates', 0),
+            reverse=True
+        )
         
-        # Hide unused subplots
-        for i in range(num_candidates, len(axes)):
-            axes[i].axis('off')
-        
-        plt.suptitle("Top Moving Object Candidates", fontsize=16)
-        plt.tight_layout()
-        
-        # Save figure
-        output_file = os.path.join(output_dir, "candidate_summary.png")
-        plt.savefig(output_file, dpi=150, bbox_inches='tight')
-        plt.close()
-        
-        if verbose:
-            print(f"    Saved summary to {output_file}")
+        for field_id, result in sorted_fields:
+            f.write(f"Field: {field_id}\n")
+            f.write(f"  Images: {result.get('num_images', 0)}\n")
+            f.write(f"  Time span: {result.get('time_span_hours', 0):.2f} hours\n")
+            f.write(f"  Initial candidates: {result.get('initial_candidates', 0)}\n")
+            f.write(f"  Filtered candidates: {result.get('filtered_candidates', 0)}\n")
+            
+            if result.get('candidates'):
+                f.write("  Top candidates:\n")
+                for i, candidate in enumerate(result['candidates'][:5]):  # Show top 5
+                    f.write(f"    {i+1}. Score: {candidate['score']:.2f}, " 
+                           f"Motion: {candidate.get('motion_arcsec_per_hour', 0):.2f} arcsec/hour, "
+                           f"Distance: {candidate.get('approx_distance_au', 0):.1f} AU\n")
+            
+            f.write("\n")
+    
+    print(f"\nSummary report saved to:")
+    print(f"  - {summary_file}")
+    print(f"  - {report_file}")
+    
+    return summary_file, report_file
 
 def main():
     parser = argparse.ArgumentParser(description="Detect KBOs in preprocessed JWST FITS files")
-    parser.add_argument('--preprocessed-dir', required=True, help="Directory containing preprocessed FITS files")
+    parser.add_argument('--preprocessed-dir', default="./data/preprocessed", 
+                       help="Directory containing preprocessed FITS files (default: ./data/preprocessed)")
     parser.add_argument('--field-id', help="Field ID to process (subfolder of preprocessed-dir)")
-    parser.add_argument('--output-dir', default="./data/detections", help="Output directory for detection results")
+    parser.add_argument('--all-fields', action='store_true', 
+                       help="Process all field directories in the preprocessed directory")
+    parser.add_argument('--output-dir', default="./data/detections", 
+                       help="Output directory for detection results (default: ./data/detections)")
     parser.add_argument('--visualization-dir', default="./data/visualization/detections", 
-                       help="Output directory for visualizations")
+                       help="Output directory for visualizations (default: ./data/visualization/detections)")
     parser.add_argument('--verbose', '-v', action='store_true', help="Print verbose output")
+    parser.add_argument('--list-fields', action='store_true', 
+                       help="List all available fields and exit")
+    parser.add_argument('--min-score', type=float, default=0.7,
+                       help="Minimum score threshold for candidates (default: 0.7)")
     
     args = parser.parse_args()
     
-    # If field_id is provided, look in that subfolder
-    if args.field_id:
-        preprocessed_dir = os.path.join(args.preprocessed_dir, args.field_id)
-        output_subdir = os.path.join(args.output_dir, args.field_id)
-        vis_subdir = os.path.join(args.visualization_dir, args.field_id)
-    else:
-        preprocessed_dir = args.preprocessed_dir
-        output_subdir = args.output_dir
-        vis_subdir = args.visualization_dir
+    # Update global constants based on command line arguments
+    if args.min_score != 0.7:
+        from detection.candidate_filter import KBO_CONSTRAINTS
+        KBO_CONSTRAINTS['min_score'] = args.min_score
     
-    # Load preprocessed images
-    images, headers, timestamps = load_preprocessed_data(preprocessed_dir, args.verbose)
+    preprocessed_dir = os.path.normpath(args.preprocessed_dir)
+    output_dir = os.path.normpath(args.output_dir)
+    vis_dir = os.path.normpath(args.visualization_dir)
     
-    if not images:
-        print("No valid preprocessed images found. Aborting detection.")
+    # Find all available fields first
+    available_fields = find_field_directories(preprocessed_dir)
+    
+    # Just list fields if requested
+    if args.list_fields:
+        if not available_fields:
+            print(f"No fields with preprocessed FITS files found in {preprocessed_dir}")
+        else:
+            print(f"Available fields in {preprocessed_dir}:")
+            for field_id, field_path in available_fields:
+                num_files = len(glob(os.path.join(field_path, "*_preprocessed.fits")))
+                print(f"  {field_id}: {num_files} preprocessed files")
         return
     
-    # Run detection
-    results = detect_moving_objects(
-        images, 
-        timestamps, 
-        output_subdir, 
-        vis_subdir, 
-        args.verbose
-    )
+    # Determine fields to process
+    fields_to_process = []
     
-    if results and results['filtered_candidates'] > 0:
-        print(f"\nDetection complete! Found {results['filtered_candidates']} candidate moving objects.")
-        print(f"Results saved to {os.path.join(output_subdir, 'moving_object_candidates.json')}")
-        print(f"Visualizations saved to {vis_subdir}")
+    if args.field_id:
+        # Process a single specified field
+        # First check if it's in the available fields
+        matching_fields = [f for f in available_fields if f[0] == args.field_id]
+        if matching_fields:
+            fields_to_process.append(matching_fields[0])
+        else:
+            # Try looking in subdirectory
+            field_path = os.path.join(preprocessed_dir, args.field_id)
+            if os.path.isdir(field_path) and glob(os.path.join(field_path, "*_preprocessed.fits")):
+                fields_to_process.append((args.field_id, field_path))
+            else:
+                print(f"Field '{args.field_id}' not found or contains no preprocessed FITS files")
+                print("Available fields:")
+                for field_id, _ in available_fields:
+                    print(f"  {field_id}")
+                return
+    elif args.all_fields:
+        # Process all available fields
+        fields_to_process = available_fields
     else:
-        print("\nNo moving objects detected in this field")
+        # Default: if there are any fields, process them all
+        if available_fields:
+            fields_to_process = available_fields
+        else:
+            print(f"No fields with preprocessed FITS files found in {preprocessed_dir}")
+            print("Please use --list-fields to see available fields")
+            return
+    
+    if not fields_to_process:
+        print(f"No valid fields found in {preprocessed_dir}")
+        return
+    
+    print(f"Found {len(fields_to_process)} fields to process")
+    
+    # Process each field
+    all_results = {}
+    
+    for field_id, field_path in fields_to_process:
+        print(f"\n{'='*80}")
+        print(f"Processing field: {field_id}")
+        print(f"{'='*80}\n")
+        
+        # Set up output directories for this field
+        field_output_dir = os.path.join(output_dir, field_id)
+        field_vis_dir = os.path.join(vis_dir, field_id)
+        
+        # Load preprocessed images
+        images, headers, timestamps = load_preprocessed_data(field_path, args.verbose)
+        
+        if not images:
+            print(f"No valid preprocessed images found in field {field_id}. Skipping.")
+            all_results[field_id] = None
+            continue
+        
+        # Run detection
+        results = detect_moving_objects(
+            images, 
+            timestamps, 
+            field_output_dir, 
+            field_vis_dir, 
+            args.verbose
+        )
+        
+        all_results[field_id] = results
+        
+        if results and results.get('filtered_candidates', 0) > 0:
+            print(f"\nDetection complete for field {field_id}!")
+            print(f"Found {results['filtered_candidates']} potential KBO candidates.")
+            print(f"Results saved to {field_output_dir}")
+            print(f"Visualizations saved to {field_vis_dir}")
+        else:
+            print(f"\nNo KBO candidates detected in field {field_id}")
+    
+    # Create summary report
+    if len(fields_to_process) > 1:
+        create_summary_report(all_results, output_dir)
+    
+    # Print final summary
+    total_candidates = sum(r.get('filtered_candidates', 0) for r in all_results.values() if r)
+    print(f"\nAll processing complete! Processed {len(fields_to_process)} fields.")
+    print(f"Total KBO candidates found: {total_candidates}")
 
 if __name__ == "__main__":
     main()

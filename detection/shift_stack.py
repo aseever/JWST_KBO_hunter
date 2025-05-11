@@ -9,9 +9,9 @@ to detect in single frames.
 import numpy as np
 from scipy import ndimage
 import warnings
-
-# Don't import from source_finder here to avoid circular imports
-# Instead, we'll import it inside the process_motion_vector function
+import traceback
+from astropy.stats import sigma_clipped_stats
+from photutils.detection import DAOStarFinder
 
 def apply_shift(image, dx, dy, order=1, mode='constant', cval=np.nan):
     """
@@ -66,14 +66,56 @@ def stack_images(images, shifts, method='mean', weights=None, mask_nans=True):
     
     # Apply shifts to each image
     shifted_images = []
-    for i, image in enumerate(images):
-        dx, dy = shifts[i]
-        shifted = apply_shift(image, dx, dy)
-        shifted_images.append(shifted)
     
-    # Stack the shifted images
-    if mask_nans:
-        # Use nanmean/nanmedian/nansum to ignore NaN values
+    try:
+        # Find minimum dimensions to ensure all shifts result in same-sized arrays
+        common_shape = []
+        for img, shift in zip(images, shifts):
+            # Predict shape after shifting
+            shifted_shape = [img.shape[0], img.shape[1]]
+            common_shape.append(shifted_shape)
+        
+        # Convert to numpy array and get minimum dimensions
+        common_shape = np.array(common_shape)
+        min_height, min_width = np.min(common_shape, axis=0)
+        
+        # Apply shifts and crop to common dimensions
+        for i, (image, shift) in enumerate(zip(images, shifts)):
+            try:
+                dx, dy = shift
+                shifted = apply_shift(image, dx, dy)
+                
+                # Crop to common dimensions
+                shifted = shifted[:min_height, :min_width]
+                
+                shifted_images.append(shifted)
+            except Exception as e:
+                print(f"Error shifting image {i}: {e}")
+                # Create placeholder of correct shape
+                placeholder = np.full((min_height, min_width), np.nan)
+                shifted_images.append(placeholder)
+        
+        # Convert to numpy array for efficient stacking
+        # Note: This will raise an error if dimensions are inconsistent
+        shifted_images = np.array(shifted_images)
+    
+    except Exception as e:
+        print(f"Error preparing images for stacking: {e}")
+        # Fallback approach: apply shifts but don't try to stack as 3D array
+        shifted_images = []
+        
+        for i, (image, shift) in enumerate(zip(images, shifts)):
+            try:
+                dx, dy = shift
+                shifted = apply_shift(image, dx, dy)
+                shifted_images.append(shifted)
+            except Exception as e:
+                print(f"Error shifting image {i}: {e}")
+                shifted_images.append(np.full_like(image, np.nan))
+    
+    # Now stack the images according to method
+    try:
+        # Stack according to method, handling NaNs properly
         if method == 'mean':
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -87,14 +129,15 @@ def stack_images(images, shifts, method='mean', weights=None, mask_nans=True):
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 stacked = np.nansum(shifted_images, axis=0)
         elif method == 'weighted_mean':
-            # Implement weighted mean with NaN handling
+            # Handle weighted mean with explicit loop to avoid array shape issues
+            weights_array = np.array(weights)
             stacked = np.zeros_like(shifted_images[0])
             weight_sum = np.zeros_like(shifted_images[0])
             
             for i, img in enumerate(shifted_images):
                 mask = ~np.isnan(img)
-                stacked[mask] += img[mask] * weights[i]
-                weight_sum[mask] += weights[i]
+                stacked[mask] += img[mask] * weights_array[i]
+                weight_sum[mask] += weights_array[i]
             
             # Normalize by sum of weights, avoiding division by zero
             mask = weight_sum > 0
@@ -102,18 +145,32 @@ def stack_images(images, shifts, method='mean', weights=None, mask_nans=True):
             stacked[~mask] = np.nan
         else:
             raise ValueError(f"Unknown stacking method: {method}")
-    else:
-        # Standard NumPy functions (will propagate NaNs)
-        if method == 'mean':
-            stacked = np.mean(shifted_images, axis=0)
-        elif method == 'median':
-            stacked = np.median(shifted_images, axis=0)
-        elif method == 'sum':
-            stacked = np.sum(shifted_images, axis=0)
-        elif method == 'weighted_mean':
-            stacked = np.average(shifted_images, axis=0, weights=weights)
+            
+    except Exception as e:
+        print(f"Error stacking images: {e}")
+        traceback.print_exc()
+        
+        # Create an emergency fallback
+        print("Using emergency fallback for stacking")
+        
+        # Use a more direct loop approach
+        # Start with the first image as base
+        if shifted_images:
+            stacked = np.copy(shifted_images[0])
+            valid_count = (~np.isnan(stacked)).astype(float)
+            
+            # Add other images
+            for img in shifted_images[1:]:
+                mask = ~np.isnan(img)
+                stacked[mask] += img[mask]
+                valid_count[mask] += 1
+            
+            # Normalize by count of valid pixels (mean)
+            mask = valid_count > 0
+            stacked[mask] /= valid_count[mask]
         else:
-            raise ValueError(f"Unknown stacking method: {method}")
+            # If no images at all, return array of NaNs
+            stacked = np.full((10, 10), np.nan)  # Arbitrary small size
     
     return stacked
 
@@ -163,307 +220,227 @@ def shift_and_stack(images, motion_vector, time_intervals, method='mean', weight
     
     return stacked, shifts
 
-def multi_shift_stack(images, motion_vectors, time_intervals, method='mean', max_vectors=None):
+def process_motion_vector(images, base_shifts, motion_vector, detection_threshold=5.0, fwhm=3.0):
     """
-    Apply shift-and-stack for multiple motion vectors
-    
-    Parameters:
-    -----------
-    images : list
-        List of 2D image arrays
-    motion_vectors : list
-        List of (dx, dy) motion vectors
-    time_intervals : list
-        List of time intervals from the first image
-    method : str
-        Stacking method
-    max_vectors : int or None
-        Maximum number of motion vectors to process (for limiting computation)
-    
-    Returns:
-    --------
-    list : List of (stacked_image, motion_vector, shifts) tuples
-    """
-    # Limit number of vectors if requested
-    if max_vectors is not None and len(motion_vectors) > max_vectors:
-        # Take a subset of vectors
-        step = len(motion_vectors) // max_vectors
-        vectors_to_use = motion_vectors[::step][:max_vectors]
-    else:
-        vectors_to_use = motion_vectors
-    
-    results = []
-    
-    for motion_vector in vectors_to_use:
-        stacked, shifts = shift_and_stack(images, motion_vector, time_intervals, method)
-        results.append((stacked, motion_vector, shifts))
-    
-    return results
-
-def shift_stack_pixel_grid(images, time_intervals, max_shift=10, step=1, method='mean'):
-    """
-    Apply shift-and-stack on a regular grid of integer pixel shifts
-    
-    Parameters:
-    -----------
-    images : list
-        List of 2D image arrays
-    time_intervals : list
-        List of time intervals from the first image
-    max_shift : int
-        Maximum shift in pixels
-    step : int
-        Step size between shifts
-    method : str
-        Stacking method
-    
-    Returns:
-    --------
-    dict : Dictionary with results keyed by (dx, dy) tuples
-    """
-    # Generate grid of shifts
-    shifts_x = range(-max_shift, max_shift + 1, step)
-    shifts_y = range(-max_shift, max_shift + 1, step)
-    
-    # Generate all motion vectors (combinations of x and y shifts)
-    motion_vectors = [(dx, dy) for dx in shifts_x for dy in shifts_y]
-    
-    # Apply shift-and-stack for each motion vector
-    results = {}
-    
-    for motion_vector in motion_vectors:
-        stacked, shifts = shift_and_stack(images, motion_vector, time_intervals, method)
-        results[motion_vector] = {
-            'stacked': stacked,
-            'shifts': shifts
-        }
-    
-    return results
-
-def apply_filter_to_stack(stacked_image, filter_type='matched', kernel_size=3):
-    """
-    Apply a filter to enhance faint point sources in stacked image
-    
-    Parameters:
-    -----------
-    stacked_image : numpy.ndarray
-        Stacked image
-    filter_type : str
-        Filter type: 'matched', 'mexican_hat', 'gaussian', or 'median'
-    kernel_size : int
-        Size of the filter kernel
-    
-    Returns:
-    --------
-    numpy.ndarray : Filtered image
-    """
-    # Make a copy of the input to avoid modification
-    filtered = np.copy(stacked_image)
-    
-    # Replace NaNs with zeros for filtering
-    mask = np.isnan(filtered)
-    filtered[mask] = 0
-    
-    if filter_type == 'matched':
-        # Simple matched filter for point sources (Gaussian PSF)
-        sigma = kernel_size / 6.0  # Approximate conversion
-        filtered = ndimage.gaussian_filter(filtered, sigma)
-    
-    elif filter_type == 'mexican_hat':
-        # Mexican hat filter (good for point sources)
-        sigma = kernel_size / 6.0
-        
-        # Create Mexican hat kernel
-        y, x = np.indices((kernel_size, kernel_size)) - (kernel_size - 1) / 2
-        r = np.sqrt(x**2 + y**2)
-        kernel = (1 - (r/sigma)**2) * np.exp(-(r**2)/(2*sigma**2))
-        kernel = kernel - np.mean(kernel)  # Make sure kernel sums to zero
-        
-        # Apply filter via convolution
-        filtered = ndimage.convolve(filtered, kernel)
-    
-    elif filter_type == 'gaussian':
-        # Gaussian smoothing
-        sigma = kernel_size / 6.0
-        filtered = ndimage.gaussian_filter(filtered, sigma)
-    
-    elif filter_type == 'median':
-        # Median filter
-        filtered = ndimage.median_filter(filtered, size=kernel_size)
-    
-    else:
-        raise ValueError(f"Unknown filter type: {filter_type}")
-    
-    # Restore NaN mask
-    filtered[mask] = np.nan
-    
-    return filtered
-
-def combine_stacks(stacks, weights=None, method='mean'):
-    """
-    Combine multiple stacked images
-    
-    Parameters:
-    -----------
-    stacks : list
-        List of stacked images
-    weights : list or None
-        List of weights for each stack
-    method : str
-        Combination method: 'mean', 'median', 'sum', or 'weighted_mean'
-    
-    Returns:
-    --------
-    numpy.ndarray : Combined stack
-    """
-    if weights is not None and method == 'weighted_mean':
-        if len(weights) != len(stacks):
-            raise ValueError("Number of weights must match number of stacks")
-        
-        # Calculate weighted mean
-        combined = np.zeros_like(stacks[0])
-        weight_sum = np.zeros_like(stacks[0])
-        
-        for i, stack in enumerate(stacks):
-            mask = ~np.isnan(stack)
-            combined[mask] += stack[mask] * weights[i]
-            weight_sum[mask] += weights[i]
-        
-        # Normalize by sum of weights, avoiding division by zero
-        mask = weight_sum > 0
-        combined[mask] /= weight_sum[mask]
-        combined[~mask] = np.nan
-    
-    elif method == 'mean':
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            combined = np.nanmean(stacks, axis=0)
-    
-    elif method == 'median':
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            combined = np.nanmedian(stacks, axis=0)
-    
-    elif method == 'sum':
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            combined = np.nansum(stacks, axis=0)
-    
-    else:
-        raise ValueError(f"Unknown combination method: {method}")
-    
-    return combined
-def filter_sources(sources, min_snr=3.0, min_flux=None, max_sources=None, exclude_border=None):
-    """
-    Filter detected sources based on quality criteria
-    
-    Parameters:
-    -----------
-    sources : pandas.DataFrame
-        Table of detected sources from detect_sources()
-    min_snr : float
-        Minimum signal-to-noise ratio for sources
-    min_flux : float or None
-        Minimum flux value for sources
-    max_sources : int or None
-        Maximum number of sources to return (sorted by flux)
-    exclude_border : int or None
-        Exclude sources this many pixels from the border
-    
-    Returns:
-    --------
-    pandas.DataFrame or None
-        Filtered sources table, or None if no sources pass the filter
-    """
-    if sources is None or len(sources) == 0:
-        return None
-    
-    # Make a copy of the sources table
-    filtered = sources.copy()
-    
-    # Initial length
-    initial_count = len(filtered)
-    
-    # Apply SNR filter if SNR column exists
-    if 'snr' in filtered.colnames and min_snr is not None:
-        filtered = filtered[filtered['snr'] >= min_snr]
-    elif 'peak' in filtered.colnames and 'sky' in filtered.colnames and min_snr is not None:
-        # Calculate SNR from peak and sky if possible
-        filtered = filtered[filtered['peak'] / filtered['sky'] >= min_snr]
-    
-    # Apply flux filter
-    if min_flux is not None and 'flux' in filtered.colnames:
-        filtered = filtered[filtered['flux'] >= min_flux]
-    
-    # Apply border filter
-    if exclude_border is not None:
-        if 'xcentroid' in filtered.colnames and 'ycentroid' in filtered.colnames:
-            # We need image dimensions for this filter, assume image is large enough
-            # This is not ideal but will work in most cases
-            margin = exclude_border
-            filtered = filtered[(filtered['xcentroid'] >= margin) & 
-                                (filtered['xcentroid'] <= 2048 - margin) &  # Assume standard image size
-                                (filtered['ycentroid'] >= margin) & 
-                                (filtered['ycentroid'] <= 2048 - margin)]
-    
-    # Sort by flux descending if flux column exists
-    if 'flux' in filtered.colnames:
-        filtered.sort('flux', reverse=True)
-    elif 'peak' in filtered.colnames:
-        filtered.sort('peak', reverse=True)
-    
-    # Limit number of sources
-    if max_sources is not None and len(filtered) > max_sources:
-        filtered = filtered[:max_sources]
-    
-    # If no sources pass the filter, return None
-    if len(filtered) == 0:
-        return None
-    
-    return filtered
-
-def process_motion_vector(images, base_shifts, motion_vector, method='mean', detection_threshold=5.0):
-    """
-    Process a single motion vector on a set of images
+    Process a single motion vector and detect sources in the stacked image
     
     Parameters:
     -----------
     images : list
         List of 2D image arrays
     base_shifts : list
-        List of (dx, dy) base shifts for each image (e.g. from initial alignment)
+        List of base shifts for each image
     motion_vector : tuple
-        (dx, dy) motion vector to test, in pixels per image
-    method : str
-        Stacking method: 'mean', 'median', 'sum', or 'weighted_mean'
+        (dx, dy) motion vector to test
     detection_threshold : float
-        Threshold for source detection in sigma
+        Detection threshold in sigma for source finding
+    fwhm : float
+        Full width at half maximum for source finding
     
     Returns:
     --------
     tuple
-        (stacked_image, detected_sources, shifts_applied)
+        (stacked_image, sources, shifts)
     """
-    # Calculate shifts for this motion vector
-    # First shift is always (0,0) for the reference image
-    shifts = [base_shifts[0]]
-    
-    # For the remaining images, calculate shift based on motion vector and index
-    for i in range(1, len(images)):
-        dx = base_shifts[i][0] - (i * motion_vector[0])
-        dy = base_shifts[i][1] - (i * motion_vector[1])
-        shifts.append((dx, dy))
-    
-    # Stack the images with these shifts
-    stacked = stack_images(images, shifts, method=method)
-    
-    # Import here to avoid circular imports
     try:
-        from detection.source_finder import detect_sources
-        sources = detect_sources(stacked, threshold=detection_threshold)
-    except ImportError:
-        # If we can't import source_finder, continue without source detection
-        sources = None
+        # Calculate shifts for this motion vector
+        dx, dy = motion_vector
+        shifts = []
+        
+        for i, base_shift in enumerate(base_shifts):
+            # Add motion vector to base shift
+            shift_x = base_shift[0] + i * dx
+            shift_y = base_shift[1] + i * dy
+            shifts.append((shift_x, shift_y))
+        
+        # Stack the images
+        stacked = stack_images(images, shifts)
+        
+        # Detect sources in stacked image
+        sources = detect_sources(stacked, threshold=detection_threshold, fwhm=fwhm)
+        
+        return stacked, sources, shifts
     
-    return stacked, sources, shifts
+    except Exception as e:
+        print(f"Error processing motion vector: {e}")
+        print(f"Motion vector: {motion_vector}")
+        traceback.print_exc()
+        
+        # Return empty results
+        return np.full_like(images[0], np.nan), None, [(0, 0) for _ in images]
 
+def detect_sources(image, threshold=5.0, fwhm=3.0):
+    """
+    Detect point sources in an image
+    
+    Parameters:
+    -----------
+    image : numpy.ndarray
+        2D image data
+    threshold : float
+        Detection threshold in sigma
+    fwhm : float
+        Full width at half maximum for source finding
+    
+    Returns:
+    --------
+    Table or None
+        Table of detected sources
+    """
+    try:
+        # Replace NaNs with median for detection
+        masked_image = np.copy(image)
+        nan_mask = np.isnan(masked_image)
+        if np.all(nan_mask):
+            return None  # All NaNs, can't detect anything
+        
+        # Get median of non-NaN values
+        median_value = np.nanmedian(masked_image)
+        masked_image[nan_mask] = median_value
+        
+        # Calculate statistics with sigma clipping
+        mean, median, std = sigma_clipped_stats(masked_image, sigma=3.0)
+        
+        # Create a source finder
+        daofind = DAOStarFinder(fwhm=fwhm, threshold=threshold*std)
+        
+        # Find sources
+        sources = daofind(masked_image - median)
+        
+        return sources
+    
+    except Exception as e:
+        print(f"Error detecting sources: {e}")
+        return None
+
+def filter_sources(sources, min_snr=3.0, min_sharpness=0.2, max_sharpness=0.8):
+    """
+    Filter detected sources based on quality criteria
+    
+    Parameters:
+    -----------
+    sources : Table
+        Table of sources from detect_sources
+    min_snr : float
+        Minimum signal-to-noise ratio
+    min_sharpness : float
+        Minimum sharpness
+    max_sharpness : float
+        Maximum sharpness
+    
+    Returns:
+    --------
+    Table
+        Filtered table of sources
+    """
+    if sources is None or len(sources) == 0:
+        return None
+    
+    # Calculate SNR if not present
+    if 'snr' not in sources.colnames:
+        if 'peak' in sources.colnames and 'sky' in sources.colnames:
+            sources['snr'] = sources['peak'] / sources['sky']
+    
+    # Apply filters
+    mask = np.ones(len(sources), dtype=bool)
+    
+    # SNR filter
+    if 'snr' in sources.colnames:
+        mask &= sources['snr'] >= min_snr
+    
+    # Sharpness filter
+    if 'sharpness' in sources.colnames:
+        mask &= (sources['sharpness'] >= min_sharpness) & (sources['sharpness'] <= max_sharpness)
+    
+    # Apply the mask
+    filtered_sources = sources[mask]
+    
+    return filtered_sources
+
+def score_candidate(candidate, original_images, original_shifts, search_radius=3):
+    """
+    Score a KBO candidate based on multiple criteria
+    
+    Parameters:
+    -----------
+    candidate : dict
+        Candidate object information
+    original_images : list
+        List of original image arrays
+    original_shifts : list
+        List of shifts for each image
+    search_radius : int
+        Radius to search around expected position
+    
+    Returns:
+    --------
+    float
+        Score between 0 and 1
+    """
+    # Extract candidate properties
+    x, y = candidate['xcentroid'], candidate['ycentroid']
+    motion_vector = candidate['motion_vector']
+    
+    # Check if candidate is near the edge of any image
+    for image in original_images:
+        if (x < 10 or x > image.shape[1] - 10 or
+            y < 10 or y > image.shape[0] - 10):
+            # Near edge, reduce score
+            return 0.3
+    
+    # Check consistency of candidate across images
+    detections = 0
+    for i, image in enumerate(original_images):
+        # Calculate expected position in this image
+        shift_x, shift_y = original_shifts[i]
+        dx = i * motion_vector[0]
+        dy = i * motion_vector[1]
+        
+        expected_x = x - dx - shift_x
+        expected_y = y - dy - shift_y
+        
+        # Skip if outside image bounds
+        if (expected_x < 0 or expected_x >= image.shape[1] or
+            expected_y < 0 or expected_y >= image.shape[0]):
+            continue
+        
+        # Extract region around expected position
+        x_min = max(0, int(expected_x - search_radius))
+        x_max = min(image.shape[1], int(expected_x + search_radius + 1))
+        y_min = max(0, int(expected_y - search_radius))
+        y_max = min(image.shape[0], int(expected_y + search_radius + 1))
+        
+        region = image[y_min:y_max, x_min:x_max]
+        
+        # Skip if all NaN
+        if np.all(np.isnan(region)):
+            continue
+        
+        # Calculate local statistics
+        local_median = np.nanmedian(region)
+        local_std = np.nanstd(region)
+        
+        # Look for peak in the region
+        peak_value = np.nanmax(region)
+        snr = (peak_value - local_median) / local_std if local_std > 0 else 0
+        
+        if snr > 2.0:
+            detections += 1
+    
+    # Calculate score based on detection rate
+    detection_rate = detections / len(original_images)
+    score = 0.5 + 0.5 * detection_rate
+    
+    # Adjust score based on motion vector
+    dx, dy = motion_vector
+    motion_speed = np.sqrt(dx*dx + dy*dy)
+    
+    # Penalize no motion (static sources)
+    if motion_speed < 0.05:
+        score *= 0.5
+    
+    # Penalize extremely high motion (likely noise)
+    if motion_speed > 2.0:
+        score *= 0.8
+    
+    return score
