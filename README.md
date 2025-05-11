@@ -2,9 +2,9 @@ This utility takes a square chunk of sky as a config. Any square will do.
 
 Cuts it into 1x1 degree squares
 
-Looks to see if there are any James Webb Space Telescope "fits" files available for download in that square from mast
+Looks to see if there are any James Webb Space Telescope "fits" files available for download in that square from MAST
 
-If there are, it checks to see if they are the type that might be useful for looking for unidentified Kuiper Belt Objects (KBO)
+If there are, check to see if they are the type that might be useful for looking for unidentified Kuiper Belt Objects (KBO)
 
 If they could be useful it downloads them carefully
 
