@@ -1,0 +1,6 @@
+# Coordinates for a moderately expanded region along the ecliptic
+# More manageable search area for MAST queries
+RA_MIN = 00h30m00s
+RA_MAX = 02h30m00s
+DEC_MIN = -03d00m00s
+DEC_MAX = +03d00m00s
