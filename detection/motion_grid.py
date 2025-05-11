@@ -267,3 +267,26 @@ def filter_motion_vectors(motion_vectors, max_vectors=100):
     step = max(1, len(motion_vectors) // max_vectors)
     
     return motion_vectors[::step]
+def generate_motion_vectors(min_speed, max_speed, num_steps=8, num_angles=16, verbose=True):
+    """
+    Generate a grid of motion vectors to test for KBO detection
+    
+    Parameters:
+    -----------
+    min_speed : float
+        Minimum speed in pixels per image
+    max_speed : float
+        Maximum speed in pixels per image
+    num_steps : int
+        Number of speed steps between min and max
+    num_angles : int
+        Number of angles to test (evenly distributed over 360 degrees)
+    verbose : bool
+        Whether to print verbose information
+    
+    Returns:
+    --------
+    list : List of (dx, dy) motion vectors in pixels per image
+    """
+    # This is essentially an alias for generate_linear_motion_grid
+    return generate_linear_motion_grid(min_speed, max_speed, num_steps, num_angles, verbose)

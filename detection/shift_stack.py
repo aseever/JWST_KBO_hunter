@@ -10,6 +10,9 @@ import numpy as np
 from scipy import ndimage
 import warnings
 
+# Remove this import to prevent circular imports
+# from .source_finder import detect_sources, filter_sources
+
 def apply_shift(image, dx, dy, order=1, mode='constant', cval=np.nan):
     """
     Shift an image by a given displacement
@@ -350,3 +353,71 @@ def combine_stacks(stacks, weights=None, method='mean'):
         raise ValueError(f"Unknown combination method: {method}")
     
     return combined
+def filter_sources(sources, min_snr=3.0, min_flux=None, max_sources=None, exclude_border=None):
+    """
+    Filter detected sources based on quality criteria
+    
+    Parameters:
+    -----------
+    sources : pandas.DataFrame
+        Table of detected sources from detect_sources()
+    min_snr : float
+        Minimum signal-to-noise ratio for sources
+    min_flux : float or None
+        Minimum flux value for sources
+    max_sources : int or None
+        Maximum number of sources to return (sorted by flux)
+    exclude_border : int or None
+        Exclude sources this many pixels from the border
+    
+    Returns:
+    --------
+    pandas.DataFrame or None
+        Filtered sources table, or None if no sources pass the filter
+    """
+    if sources is None or len(sources) == 0:
+        return None
+    
+    # Make a copy of the sources table
+    filtered = sources.copy()
+    
+    # Initial length
+    initial_count = len(filtered)
+    
+    # Apply SNR filter if SNR column exists
+    if 'snr' in filtered.colnames and min_snr is not None:
+        filtered = filtered[filtered['snr'] >= min_snr]
+    elif 'peak' in filtered.colnames and 'sky' in filtered.colnames and min_snr is not None:
+        # Calculate SNR from peak and sky if possible
+        filtered = filtered[filtered['peak'] / filtered['sky'] >= min_snr]
+    
+    # Apply flux filter
+    if min_flux is not None and 'flux' in filtered.colnames:
+        filtered = filtered[filtered['flux'] >= min_flux]
+    
+    # Apply border filter
+    if exclude_border is not None:
+        if 'xcentroid' in filtered.colnames and 'ycentroid' in filtered.colnames:
+            # We need image dimensions for this filter, assume image is large enough
+            # This is not ideal but will work in most cases
+            margin = exclude_border
+            filtered = filtered[(filtered['xcentroid'] >= margin) & 
+                                (filtered['xcentroid'] <= 2048 - margin) &  # Assume standard image size
+                                (filtered['ycentroid'] >= margin) & 
+                                (filtered['ycentroid'] <= 2048 - margin)]
+    
+    # Sort by flux descending if flux column exists
+    if 'flux' in filtered.colnames:
+        filtered.sort('flux', reverse=True)
+    elif 'peak' in filtered.colnames:
+        filtered.sort('peak', reverse=True)
+    
+    # Limit number of sources
+    if max_sources is not None and len(filtered) > max_sources:
+        filtered = filtered[:max_sources]
+    
+    # If no sources pass the filter, return None
+    if len(filtered) == 0:
+        return None
+    
+    return filtered
