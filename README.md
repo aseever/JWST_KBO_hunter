@@ -1,22 +1,22 @@
-This utility takes a square chunk of sky as a config. Any square will do.
+Try to find unidentified Kuiper Belt Objects (KBO) in James Webb Space Telescope "fits" files available for download from MAST
 
-Cuts it into 1x1 degree squares
+It goes like this:
 
-Looks to see if there are any James Webb Space Telescope "fits" files available for download in that square from MAST
+**# Search for observations** 
+python kbo_hunt.py search --config config/coordinates.txt --ecliptic-priority
 
-If there are, check to see if they are the type that might be useful for looking for unidentified Kuiper Belt Objects (KBO)
+**# Filter results (using the actual filenames from the previous step)**
+python kbo_hunt.py filter --catalog data/search_20250511_123456/combined_results_20250511_123456.json
 
-If they could be useful it downloads them carefully
+**# Download filtered candidates**
+python kbo_hunt.py download --catalog data/kbo_candidates_20250511_123456.json
 
-Fits files need a little clean 'n collate before they're ready to roll
+**#post-download filter and line up the files**
+python preprocess.py --fits-dir ./data/fits --verbose
 
-Then we look for movement that matches what a KBO object would _move_ like, twinkle like, and at a distance they'd likely be at
+**#Look for motion**
+python kbo_detector.py --preprocessed-dir ./data/preprocessed --verbose
 
-Then we stare really hard at the pixels and squint at them, and jiggle them slightly, and scrunch our nose
-
-If we see something, make a note of it
-
-Look in all the catalogs because someone has almost definitely already seen it
-
-If not.... ....
+**#Check for catalog entries of anomalies (apis don't work yet)**
+python lookup_kbo_candidates.py --verbose
 
