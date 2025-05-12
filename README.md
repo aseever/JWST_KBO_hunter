@@ -18,7 +18,7 @@ python kbo_hunt.py download --catalog data/kbo_candidates_20250511_123456.json
 
 python preprocess.py --fits-dir ./data/fits --verbose
 
-**#Look for motion**
+**#Look for motion, shift n stack, squint and scrunch up your nose**
 
 python kbo_detector.py --preprocessed-dir ./data/preprocessed --verbose
 
