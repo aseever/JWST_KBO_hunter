@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        .header {
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .infobox {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .good {
+            color: green;
+        }
+        .warning {
+            color: orange;
+        }
+        .bad {
+            color: red;
+        }
+        .plot-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .plot-container img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 5px;
+        }
+        .detection-images {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .detection-image {
+            flex: 1;
+            min-width: 300px;
+            max-width: 400px;
+            text-align: center;
+        }
+        .detection-image img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 5px;
+        }
+        .footer {
+            margin-top: 30px;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+            font-size: 0.8em;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{ title }}</h1>
+        <p>Generated on: {{ timestamp }}</p>
+    </div>
+    
+    <h2>Candidate Information</h2>
+    <div class="infobox">
+        <table>
+            <tr>
+                <th>ID</th>
+                <td>{{ candidate.id }}</td>
+            </tr>
+            <tr>
+                <th>Classification</th>
+                <td>
+                    {% if candidate.classification == "possible_new" %}
+                        <span class="good">Possible New Object</span>
+                    {% elif candidate.classification == "known_high_confidence" %}
+                        <span class="bad">Known Object (High Confidence)</span>
+                    {% elif candidate.classification == "known_medium_confidence" %}
+                        <span class="warning">Known Object (Medium Confidence)</span>
+                    {% elif candidate.classification == "known_low_confidence" %}
+                        <span class="warning">Known Object (Low Confidence)</span>
+                    {% else %}
+                        <span>{{ candidate.classification|default("Unknown") }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <th>Position (RA, Dec)</th>
+                <td>{{ "%.6f"|format(candidate.ra) }}°, {{ "%.6f"|format(candidate.dec) }}°</td>
+            </tr>
+            <tr>
+                <th>Motion Rate</th>
+                <td>{{ "%.2f"|format(candidate.motion_rate|default(0)) }} arcsec/hour</td>
+            </tr>
+            <tr>
+                <th>Motion Angle</th>
+                <td>{{ "%.1f"|format(candidate.motion_angle|default(0)) }}° ({{ "%.1f"|format((candidate.motion_angle|default(0) + 90) % 360) }}°PA)</td>
+            </tr>
+            <tr>
+                <th>Detection Time</th>
+                <td>{{ candidate.epoch }}</td>
+            </tr>
+            {% if candidate.mag is defined %}
+            <tr>
+                <th>Magnitude</th>
+                <td>{{ "%.1f"|format(candidate.mag) }} {{ candidate.filter_name|default("") }}</td>
+            </tr>
+            {% endif %}
+            {% if candidate.confidence is defined %}
+            <tr>
+                <th>Confidence Score</th>
+                <td>{{ "%.2f"|format(candidate.confidence) }}</td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+    
+    {% if include_plots and plots is defined and plots.motion is defined %}
+    <div class="plot-container">
+        <h3>Motion Vector Analysis</h3>
+        <img src="data:image/png;base64,{{ plots.motion }}" alt="Motion Vector Plot">
+    </div>
+    {% endif %}
+    
+    <h2>Match Results</h2>
+    <div class="infobox">
+        {% if matches.is_match %}
+            <h3>
+                {% if matches.confidence > 0.9 %}
+                    <span class="bad">Strong match found</span>
+                {% elif matches.confidence > 0.7 %}
+                    <span class="warning">Probable match found</span>
+                {% else %}
+                    <span class="warning">Possible match found</span>
+                {% endif %}
+            </h3>
+            <p>Match confidence: {{ "%.2f"|format(matches.confidence) }}</p>
+            
+            {% if matches.best_match %}
+                <h4>Best Match:</h4>
+                <table>
+                    <tr>
+                        <th>Catalog</th>
+                        <td>{{ matches.best_match.catalog }}</td>
+                    </tr>
+                    <tr>
+                        <th>Object ID</th>
+                        <td>{{ matches.best_match.id }}</td>
+                    </tr>
+                    <tr>
+                        <th>Separation</th>
+                        <td>{{ "%.2f"|format(matches.best_match.separation|default(0)) }} arcsec</td>
+                    </tr>
+                    {% if matches.best_match.a is defined %}
+                    <tr>
+                        <th>Semi-major Axis</th>
+                        <td>{{ "%.2f"|format(matches.best_match.a) }} AU</td>
+                    </tr>
+                    {% endif %}
+                    {% if matches.best_match.e is defined %}
+                    <tr>
+                        <th>Eccentricity</th>
+                        <td>{{ "%.3f"|format(matches.best_match.e) }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if matches.best_match.i is defined %}
+                    <tr>
+                        <th>Inclination</th>
+                        <td>{{ "%.2f"|format(matches.best_match.i) }}°</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            {% endif %}
+            
+            {% if include_plots and plots is defined and plots.position is defined %}
+            <div class="plot-container">
+                <h4>Position Comparison with Matches</h4>
+                <img src="data:image/png;base64,{{ plots.position }}" alt="Position Comparison Plot">
+            </div>
+            {% endif %}
+            
+            {% if matches.matches and matches.matches|length > 1 %}
+                <h4>All Matches ({{ matches.matches|length }}):</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Catalog</th>
+                            <th>Object ID</th>
+                            <th>Separation</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for match in matches.matches %}
+                        <tr>
+                            <td>{{ match.catalog }}</td>
+                            <td>{{ match.id }}</td>
+                            <td>{{ "%.2f"|format(match.separation|default(0)) }} arcsec</td>
+                            <td>{{ "%.2f"|format(match.confidence|default(0)) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
+        {% else %}
+            <h3><span class="good">No matching known objects found</span></h3>
+            <p>This could be a new discovery!</p>
+            
+            {% if matches.new_object_probability is defined %}
+            <p>Probability of being a new object: {{ "%.1f"|format(matches.new_object_probability * 100) }}%</p>
+            {% endif %}
+            
+            {% if matches.notes %}
+            <h4>Notes:</h4>
+            <ul>
+                {% for note in matches.notes %}
+                <li>{{ note }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        {% endif %}
+    </div>
+    
+    {% if has_detection_images and detection_images %}
+    <h2>Detection Images</h2>
+    <div class="detection-images">
+        {% for image in detection_images %}
+        <div class="detection-image">
+            <h3>{{ image.title|default("Detection " + loop.index|string) }}</h3>
+            <img src="data:image/png;base64,{{ image.data }}" alt="{{ image.title|default("Detection image") }}">
+            {% if image.caption %}
+            <p>{{ image.caption }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    
+    <div class="footer">
+        <p>Generated by KBO Catalog Lookup System</p>
+    </div>
+</body>
+</html>

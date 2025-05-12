@@ -16,7 +16,7 @@ Available clients:
 # Import clients
 from catalog_lookup.clients.mpc_client import MPCClient
 from catalog_lookup.clients.jpl_client import JPLClient
-from catalog_lookup.clients.skybot_client import SkyBoTClient
+from catalog_lookup.clients.skybot_client import SkyBotClient
 from catalog_lookup.clients.panstarrs_client import PanSTARRSClient
 from catalog_lookup.clients.ossos_client import OSSOSClient
 
@@ -43,7 +43,7 @@ def get_client(catalog_name):
     catalog_map = {
         'mpc': MPCClient,
         'jpl': JPLClient,
-        'skybot': SkyBoTClient,
+        'skybot': SkyBotClient,
         'panstarrs': PanSTARRSClient,
         'ossos': OSSOSClient
     }
@@ -59,7 +59,7 @@ DEFAULT_CATALOGS = ['mpc', 'jpl', 'skybot']
 __all__ = [
     'MPCClient',
     'JPLClient', 
-    'SkyBoTClient',
+    'SkyBotClient',
     'PanSTARRSClient', 
     'OSSOSClient',
     'get_client',
