@@ -2,7 +2,7 @@ Try to find unidentified Kuiper Belt Objects (KBO) in James Webb Space Telescope
 
 It goes like this:
 
-**# Search for observations** 
+**# Search MAST for observations in a given box** 
 
 python kbo_hunt.py search --config config/coordinates.txt --ecliptic-priority
 
