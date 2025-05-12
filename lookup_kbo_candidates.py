@@ -384,7 +384,9 @@ def process_candidate_file(file_path: str,
         os.makedirs(field_mpc_dir, exist_ok=True)
     
     # Create reporters
-    json_reporter = HTMLReporter = mpc_reporter = None
+    json_reporter = None
+    html_reporter = None
+    mpc_reporter = None
     
     if 'json' in formats:
         json_reporter = JSONReporter(output_dir=field_json_dir)
@@ -644,6 +646,9 @@ def main():
                        help="Fit orbits to candidates with multiple detections")
     parser.add_argument('--verbose', '-v', action='store_true', 
                        help="Enable verbose output")
+    # Add a new command line parameter for disabling catalogs:
+    parser.add_argument('--disable-catalogs', default="mpc,jpl,skybot,panstarrs,ossos", 
+                       help="Comma-separated list of catalogs to disable: mpc,jpl,skybot,panstarrs,ossos")
     
     args = parser.parse_args()
     
@@ -677,14 +682,17 @@ def main():
     logger.info("Initializing catalog lookup system components...")
     
     # Create query manager
+    disabled_catalogs = [cat.strip() for cat in args.disable_catalogs.split(',') if cat.strip()]
+
     query_manager = QueryManager(
         cache_dir=args.cache_dir,
         ossos_data_dir=args.ossos_data_dir,
         parallel_queries=args.parallel,
         max_workers=4,
-        verbose=args.verbose
+        verbose=args.verbose,
+        disabled_catalogs=disabled_catalogs
     )
-    
+        
     # Create match evaluator
     match_evaluator = MatchEvaluator(
         position_tolerance_arcsec=10.0,

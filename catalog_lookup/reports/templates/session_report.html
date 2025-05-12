@@ -120,17 +120,17 @@
             <table>
                 <tr>
                     <th>Session ID</th>
-                    <td>{{ session.id }}</td>
+                    <td>{{ session.get('id', 'Unknown') }}</td>
                 </tr>
                 <tr>
                     <th>Date</th>
-                    <td>{{ session.date }}</td>
+                    <td>{{ session.get('date', 'Unknown') }}</td>
                 </tr>
                 <tr>
                     <th>Field Center</th>
                     <td>
-                        {% if session.field_ra is defined and session.field_dec is defined %}
-                            RA: {{ "%.6f"|format(session.field_ra) }}°, Dec: {{ "%.6f"|format(session.field_dec) }}°
+                        {% if session.get('field_ra') is not none and session.get('field_dec') is not none %}
+                            RA: {{ "%.6f"|format(session['field_ra']) }}&deg;, Dec: {{ "%.6f"|format(session['field_dec']) }}&deg;
                         {% else %}
                             Not specified
                         {% endif %}
@@ -139,8 +139,8 @@
                 <tr>
                     <th>Observation Time Range</th>
                     <td>
-                        {% if session.start_time is defined and session.end_time is defined %}
-                            {{ session.start_time }} to {{ session.end_time }}
+                        {% if session.get('start_time') is not none and session.get('end_time') is not none %}
+                            {{ session['start_time'] }} to {{ session['end_time'] }}
                         {% else %}
                             Not specified
                         {% endif %}
@@ -148,7 +148,7 @@
                 </tr>
                 <tr>
                     <th>Number of Images</th>
-                    <td>{{ session.num_images|default("Not specified") }}</td>
+                    <td>{{ session.get('num_images', 'Not specified') }}</td>
                 </tr>
                 <tr>
                     <th>Total Candidates</th>
@@ -163,39 +163,39 @@
         
         <div class="stats-container">
             <div class="stat-box">
-                <div class="number">{{ classifications.total }}</div>
+                <div class="number">{{ classifications.get('total', 0) }}</div>
                 <div class="label">Total Candidates</div>
             </div>
             <div class="stat-box">
-                <div class="number good">{{ classifications.new }}</div>
+                <div class="number good">{{ classifications.get('new', 0) }}</div>
                 <div class="label">Possible New Objects</div>
             </div>
             <div class="stat-box">
-                <div class="number bad">{{ classifications.high_conf }}</div>
+                <div class="number bad">{{ classifications.get('high_conf', 0) }}</div>
                 <div class="label">High Confidence Matches</div>
             </div>
             <div class="stat-box">
-                <div class="number warning">{{ classifications.medium_conf + classifications.low_conf }}</div>
+                <div class="number warning">{{ classifications.get('medium_conf', 0) + classifications.get('low_conf', 0) }}</div>
                 <div class="label">Medium/Low Confidence</div>
             </div>
             <div class="stat-box">
-                <div class="number neutral">{{ classifications.uncertain }}</div>
+                <div class="number neutral">{{ classifications.get('uncertain', 0) }}</div>
                 <div class="label">Uncertain</div>
             </div>
         </div>
         
         {% if include_plots and plots is defined %}
-            {% if plots.classification is defined %}
+            {% if plots.get('classification') is not none %}
             <div class="plot-container">
                 <h3>Classification Distribution</h3>
-                <img src="data:image/png;base64,{{ plots.classification }}" alt="Classification Distribution">
+                <img src="data:image/png;base64,{{ plots['classification'] }}" alt="Classification Distribution">
             </div>
             {% endif %}
             
-            {% if plots.sky_distribution is defined %}
+            {% if plots.get('sky_distribution') is not none %}
             <div class="plot-container">
                 <h3>Sky Distribution of Candidates</h3>
-                <img src="data:image/png;base64,{{ plots.sky_distribution }}" alt="Sky Distribution">
+                <img src="data:image/png;base64,{{ plots['sky_distribution'] }}" alt="Sky Distribution">
             </div>
             {% endif %}
         {% endif %}
@@ -234,29 +234,55 @@
                 </thead>
                 <tbody>
                     {% for candidate in candidates %}
-                    <tr class="candidate-row" data-classification="{{ candidate.classification }}">
-                        <td>{{ candidate.id }}</td>
+                    <tr class="candidate-row" data-classification="{{ candidate.get('classification', 'uncertain') }}">
+                        <td>{{ candidate.get('id', 'Unknown') }}</td>
                         <td>
-                            {% if candidate.classification == "possible_new" %}
+                            {% if candidate.get('classification') == "possible_new" %}
                                 <span class="good">Possible New Object</span>
-                            {% elif candidate.classification == "known_high_confidence" %}
+                            {% elif candidate.get('classification') == "known_high_confidence" %}
                                 <span class="bad">Known (High Confidence)</span>
-                            {% elif candidate.classification == "known_medium_confidence" %}
+                            {% elif candidate.get('classification') == "known_medium_confidence" %}
                                 <span class="warning">Known (Medium Confidence)</span>
-                            {% elif candidate.classification == "known_low_confidence" %}
+                            {% elif candidate.get('classification') == "known_low_confidence" %}
                                 <span class="warning">Known (Low Confidence)</span>
                             {% else %}
-                                <span class="neutral">{{ candidate.classification|default("Uncertain") }}</span>
+                                <span class="neutral">{{ candidate.get('classification', 'Uncertain') }}</span>
                             {% endif %}
                         </td>
-                        <td>{{ "%.6f"|format(candidate.ra) }}°, {{ "%.6f"|format(candidate.dec) }}°</td>
-                        <td>{{ "%.2f"|format(candidate.motion_rate|default(0)) }} arcsec/hour</td>
-                        <td>{{ "%.1f"|format(candidate.motion_angle|default(0)) }}°</td>
-                        <td>{{ "%.2f"|format(candidate.match_confidence|default(0)) }}</td>
                         <td>
-                            {% if candidate.best_match %}
-                                {{ candidate.best_match.catalog }}: {{ candidate.best_match.id }}
-                                ({{ "%.2f"|format(candidate.best_match.separation|default(0)) }} arcsec)
+                            {% if candidate.get('ra') is not none and candidate.get('dec') is not none %}
+                                {{ "%.6f"|format(candidate['ra']) }}&deg;, {{ "%.6f"|format(candidate['dec']) }}&deg;
+                            {% else %}
+                                Unknown
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if candidate.get('motion_rate') is not none %}
+                                {{ "%.2f"|format(candidate['motion_rate']) }} arcsec/hour
+                            {% else %}
+                                Unknown
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if candidate.get('motion_angle') is not none %}
+                                {{ "%.1f"|format(candidate['motion_angle']) }}&deg;
+                            {% else %}
+                                Unknown
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if candidate.get('match_confidence') is not none %}
+                                {{ "%.2f"|format(candidate['match_confidence']) }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if candidate.get('best_match') %}
+                                {{ candidate['best_match'].get('catalog', 'Unknown') }}: {{ candidate['best_match'].get('id', 'Unknown') }}
+                                {% if candidate['best_match'].get('separation') is not none %}
+                                    ({{ "%.2f"|format(candidate['best_match']['separation']) }} arcsec)
+                                {% endif %}
                             {% else %}
                                 None
                             {% endif %}

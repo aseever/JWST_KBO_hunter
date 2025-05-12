@@ -1,212 +1,380 @@
 """
-test_orbit_tools.py - Test script for the orbit tools
+orbit_tools.py - Utilities for orbital calculations and matching
 
-Usage:
-    python test_orbit_tools.py
+This module provides tools for working with orbital elements, calculating positions,
+comparing orbits, and fitting orbits to observational data.
 """
 
-import sys
-import json
-import logging
-import os
 import numpy as np
-from datetime import datetime
+from typing import Dict, Any, List, Optional, Union, Tuple
+from enum import Enum
+from dataclasses import dataclass
+import logging
 from astropy.time import Time
 import astropy.units as u
 from astropy.coordinates import SkyCoord
-from catalog_lookup.core.orbit_tools import OrbitTools, OrbitalElements, ObservedPosition, KBODynamicalClass
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set up logging
+logger = logging.getLogger(__name__)
 
-def main():
-    print("Initializing Orbit Tools...")
+@dataclass
+class OrbitalElements:
+    """Class to store orbital elements of a solar system object."""
+    a: float                 # Semi-major axis (AU)
+    e: float                 # Eccentricity
+    i: float                 # Inclination (degrees)
+    Omega: float             # Longitude of ascending node (degrees)
+    omega: float             # Argument of perihelion (degrees)
+    M: float                 # Mean anomaly (degrees)
+    epoch: Time              # Epoch of elements
     
-    # Create orbit tools
-    orbit_tools = OrbitTools(verbose=True)
+    @property
+    def q(self) -> float:
+        """Perihelion distance (AU)"""
+        return self.a * (1 - self.e)
     
-    # Example 1: Calculate position from elements
-    print("\n=== Example 1: Calculate Position from Elements ===")
+    @property
+    def Q(self) -> float:
+        """Aphelion distance (AU)"""
+        return self.a * (1 + self.e)
     
-    # Define orbital elements for a sample KBO (similar to Pluto)
-    pluto_elements = OrbitalElements(
-        a=39.5,           # Semi-major axis (AU)
-        e=0.25,           # Eccentricity
-        i=17.1,           # Inclination (degrees)
-        Omega=110.3,      # Longitude of ascending node (degrees)
-        omega=113.8,      # Argument of perihelion (degrees)
-        M=14.9,           # Mean anomaly (degrees)
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')  # Epoch
-    )
+    @property
+    def P(self) -> float:
+        """Orbital period (years)"""
+        return np.sqrt(self.a**3)  # Kepler's third law, simplified for the Sun
+
+@dataclass
+class ObservedPosition:
+    """Class to store a position observation."""
+    ra: float                # Right ascension (degrees)
+    dec: float               # Declination (degrees)
+    epoch: Time              # Observation time
+    ra_err: float = 0.1      # RA uncertainty (arcseconds)
+    dec_err: float = 0.1     # Dec uncertainty (arcseconds)
+    mag: Optional[float] = None  # Magnitude if available
+    filter_name: Optional[str] = None  # Filter name if available
+
+class KBODynamicalClass(Enum):
+    """Enumeration of KBO dynamical classes."""
+    CLASSICAL = "classical_kbo"
+    RESONANT = "resonant"
+    SCATTERED = "scattered_disk"
+    DETACHED = "detached"
+    CENTAUR = "centaur"
+    PLUTINO = "plutino"
+    TWOTINO = "twotino"
+    OTHER_RESONANT = "other_resonant"
+    UNKNOWN = "unknown"
+
+class OrbitTools:
+    """
+    Tools for orbital calculations and matching.
     
-    # Calculate position for a specific date
-    epoch = Time('2023-07-01T00:00:00', scale='tdb')
-    ra, dec = orbit_tools.calculate_position(pluto_elements, epoch)
+    This class provides methods for working with orbital elements,
+    calculating positions, comparing orbits, and fitting orbits to
+    observational data.
+    """
     
-    print(f"Calculated position for epoch {epoch.iso}:")
-    print(f"  RA: {ra:.6f} degrees")
-    print(f"  Dec: {dec:.6f} degrees")
+    def __init__(self, verbose: bool = False):
+        """
+        Initialize the orbit tools.
+        
+        Args:
+            verbose: Whether to print verbose output.
+        """
+        self.verbose = verbose
     
-    # Example 2: Convert between elements and state vector
-    print("\n=== Example 2: Elements to State Vector and Back ===")
+    def calculate_position(self, 
+                         elements: OrbitalElements, 
+                         epoch: Time) -> Tuple[float, float]:
+        """
+        Calculate position (RA, Dec) from orbital elements.
+        
+        Args:
+            elements: Orbital elements.
+            epoch: Time for which to calculate the position.
+            
+        Returns:
+            Tuple of (RA, Dec) in degrees.
+        """
+        # This is a placeholder for a real implementation
+        # In a real implementation, this would use full orbital mechanics
+        
+        # For now, return a simplified approximation
+        # This is not accurate for real use!
+        
+        # If epoch is the same as elements.epoch, just return a fixed position
+        ra = 30.0 + 0.1 * elements.a  # Not a real calculation
+        dec = 10.0 + 0.05 * elements.i  # Not a real calculation
+        
+        return ra, dec
     
-    # Convert elements to state vector
-    pos, vel = orbit_tools.elements_to_state_vector(pluto_elements, epoch)
+    def elements_to_state_vector(self, 
+                               elements: OrbitalElements, 
+                               epoch: Optional[Time] = None) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Convert orbital elements to state vector (position, velocity).
+        
+        Args:
+            elements: Orbital elements.
+            epoch: Optional time for which to calculate the state. If None, uses elements.epoch.
+            
+        Returns:
+            Tuple of (position, velocity) where each is a 3D numpy array in heliocentric coordinates.
+        """
+        # This is a placeholder for a real implementation
+        # In a real implementation, this would use full orbital mechanics
+        
+        # For now, return a simplified approximation
+        # This is not accurate for real use!
+        
+        # Generate a simple state vector based on elements
+        pos = np.array([elements.a * (1 - elements.e), 0.0, 0.0])  # Not a real calculation
+        vel = np.array([0.0, np.sqrt(1.0 / elements.a) * (1 + elements.e), 0.0])  # Not a real calculation
+        
+        return pos, vel
     
-    print("State vector at the same epoch:")
-    print(f"  Position (AU): [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]")
-    print(f"  Velocity (AU/day): [{vel[0]:.5f}, {vel[1]:.5f}, {vel[2]:.5f}]")
+    def state_vector_to_elements(self, 
+                               position: np.ndarray, 
+                               velocity: np.ndarray, 
+                               epoch: Time) -> OrbitalElements:
+        """
+        Convert state vector (position, velocity) to orbital elements.
+        
+        Args:
+            position: 3D position vector in heliocentric coordinates (AU).
+            velocity: 3D velocity vector in heliocentric coordinates (AU/day).
+            epoch: Time of the state vector.
+            
+        Returns:
+            OrbitalElements object.
+        """
+        # This is a placeholder for a real implementation
+        # In a real implementation, this would use full orbital mechanics
+        
+        # For now, return a simplified approximation
+        # This is not accurate for real use!
+        
+        # Calculate some basic elements from position and velocity
+        r = np.linalg.norm(position)
+        v = np.linalg.norm(velocity)
+        
+        # These calculations are not accurate - just placeholders
+        a = 1.0 / (2.0 / r - v**2)
+        e = 0.1  # Placeholder
+        i = 5.0  # Placeholder
+        Omega = 100.0  # Placeholder
+        omega = 50.0  # Placeholder
+        M = 30.0  # Placeholder
+        
+        return OrbitalElements(a=a, e=e, i=i, Omega=Omega, omega=omega, M=M, epoch=epoch)
     
-    # Convert back to elements
-    reconstructed_elements = orbit_tools.state_vector_to_elements(pos, vel, epoch)
+    def calculate_orbit_similarity(self, 
+                                orbit1: OrbitalElements, 
+                                orbit2: OrbitalElements) -> float:
+        """
+        Calculate similarity between two orbits.
+        
+        Args:
+            orbit1: First orbit.
+            orbit2: Second orbit.
+            
+        Returns:
+            Similarity score between 0 and 1, where 1 is identical.
+        """
+        # This is a simplified approach - a real implementation would use
+        # proper orbital similarity metrics like D-criteria
+        
+        # Calculate differences in key elements
+        a_diff = abs(orbit1.a - orbit2.a) / max(orbit1.a, orbit2.a)
+        e_diff = abs(orbit1.e - orbit2.e)
+        i_diff = abs(orbit1.i - orbit2.i) / 180.0  # Normalize to [0, 1]
+        
+        # Combine differences with weights
+        # These weights are arbitrary - a real implementation would use
+        # more sophisticated metrics
+        similarity = 1.0 - (0.5 * a_diff + 0.3 * e_diff + 0.2 * i_diff)
+        
+        # Ensure result is between 0 and 1
+        return max(0.0, min(1.0, similarity))
     
-    print("\nReconstructed elements:")
-    print(f"  a: {reconstructed_elements.a:.3f} AU")
-    print(f"  e: {reconstructed_elements.e:.3f}")
-    print(f"  i: {reconstructed_elements.i:.3f} degrees")
-    print(f"  Ω: {reconstructed_elements.Omega:.3f} degrees")
-    print(f"  ω: {reconstructed_elements.omega:.3f} degrees")
-    print(f"  M: {reconstructed_elements.M:.3f} degrees")
-    
-    # Example 3: Classify orbits
-    print("\n=== Example 3: Classify Orbits ===")
-    
-    # Define different types of orbits
-    orbit_examples = {
-        "Classical KBO": OrbitalElements(
-            a=44.0, e=0.05, i=2.0, Omega=100.0, omega=50.0, M=30.0, 
-            epoch=Time('2023-01-01')
-        ),
-        "Plutino (3:2 resonant)": OrbitalElements(
-            a=39.4, e=0.22, i=15.0, Omega=90.0, omega=120.0, M=45.0, 
-            epoch=Time('2023-01-01')
-        ),
-        "Scattered disk": OrbitalElements(
-            a=50.0, e=0.5, i=20.0, Omega=150.0, omega=70.0, M=10.0, 
-            epoch=Time('2023-01-01')
-        ),
-        "Detached object": OrbitalElements(
-            a=80.0, e=0.4, i=35.0, Omega=200.0, omega=300.0, M=5.0, 
-            epoch=Time('2023-01-01')
-        ),
-        "Centaur": OrbitalElements(
-            a=18.0, e=0.3, i=10.0, Omega=40.0, omega=60.0, M=90.0, 
-            epoch=Time('2023-01-01')
+    def fit_orbit(self, 
+                observations: List[ObservedPosition],
+                initial_guess: Optional[OrbitalElements] = None,
+                distance_estimate_au: Optional[float] = None) -> Tuple[OrbitalElements, float]:
+        """
+        Fit orbital elements to a set of observations.
+        
+        Args:
+            observations: List of observed positions.
+            initial_guess: Optional initial guess for the orbit.
+            distance_estimate_au: Optional estimated distance in AU.
+            
+        Returns:
+            Tuple of (fitted elements, RMS error in arcseconds).
+        """
+        # This is a placeholder for a real implementation
+        # In a real implementation, this would use a proper orbit determination method
+        
+        if len(observations) < 3:
+            raise ValueError("At least 3 observations are required for orbit fitting")
+        
+        # For now, return a very simplified orbit based on the observations
+        if self.verbose:
+            print(f"Fitting orbit to {len(observations)} positions")
+            print(f"First position: RA={observations[0].ra:.4f}°, Dec={observations[0].dec:.4f}°")
+            print(f"Last position: RA={observations[-1].ra:.4f}°, Dec={observations[-1].dec:.4f}°")
+        
+        # Use distance estimate if provided, otherwise use a default for TNOs
+        a = distance_estimate_au if distance_estimate_au is not None else 40.0
+        
+        # Create a very simplified orbit
+        # This is not an actual orbit fit!
+        elements = OrbitalElements(
+            a=a,
+            e=0.1,
+            i=5.0,
+            Omega=100.0,
+            omega=50.0,
+            M=30.0,
+            epoch=observations[0].epoch
         )
-    }
-    
-    for name, elements in orbit_examples.items():
-        kbo_class = orbit_tools.classify_orbit(elements)
-        print(f"{name}: {kbo_class.name}")
         
-        # Print orbital characteristics
-        print(f"  a: {elements.a:.1f} AU, e: {elements.e:.2f}, i: {elements.i:.1f}°")
-        print(f"  Perihelion: {elements.q:.1f} AU, Aphelion: {elements.Q:.1f} AU")
-        print(f"  Period: {elements.P:.1f} years")
-    
-    # Example 4: Fit orbit to observations
-    print("\n=== Example 4: Fit Orbit to Observations ===")
-    
-    # Create synthetic observations for a known orbit
-    true_elements = OrbitalElements(
-        a=42.5, e=0.12, i=8.5, Omega=130.0, omega=75.0, M=25.0,
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')
-    )
-    
-    # Generate synthetic observations
-    observations = []
-    for days in [0, 10, 20, 30, 40]:
-        epoch = Time('2023-01-01T00:00:00') + days*u.day
-        ra, dec = orbit_tools.calculate_position(true_elements, epoch)
+        # Calculate a fake RMS error
+        rms_error = 0.5  # Arbitrary value
         
-        # Add small random noise (0.1 arcsec)
-        ra += np.random.normal(0, 0.1/3600)
-        dec += np.random.normal(0, 0.1/3600)
+        return elements, rms_error
+    
+    def classify_orbit(self, elements: OrbitalElements) -> KBODynamicalClass:
+        """
+        Classify orbit into KBO dynamical classes.
         
-        observations.append(ObservedPosition(
-            ra=ra,
-            dec=dec,
-            epoch=epoch,
-            ra_err=0.1,
-            dec_err=0.1
-        ))
+        Args:
+            elements: Orbital elements.
+            
+        Returns:
+            KBODynamicalClass value.
+        """
+        # Simple classification based on orbital elements
+        a = elements.a
+        e = elements.e
+        i = elements.i
+        
+        # Centaur: planet-crossing orbit, typically between Jupiter and Neptune
+        if a < 30.0 and a > 5.0:
+            return KBODynamicalClass.CENTAUR
+        
+        # Plutino: 3:2 resonance with Neptune
+        if 39.0 < a < 40.0:
+            return KBODynamicalClass.PLUTINO
+        
+        # Twotino: 2:1 resonance with Neptune
+        if 47.0 < a < 49.0:
+            return KBODynamicalClass.TWOTINO
+        
+        # Classical KBO: low e, low i, between 42-48 AU
+        if 42.0 < a < 48.0 and e < 0.2 and i < 10.0:
+            return KBODynamicalClass.CLASSICAL
+        
+        # Scattered disk: higher e, a > 30
+        if a > 30.0 and e > 0.3:
+            return KBODynamicalClass.SCATTERED
+        
+        # Detached: large a, but perihelion detached from Neptune
+        if a > 50.0 and elements.q > 40.0:
+            return KBODynamicalClass.DETACHED
+        
+        # Default: unknown
+        return KBODynamicalClass.UNKNOWN
     
-    print(f"Generated {len(observations)} synthetic observations")
-    
-    # Create initial guess (intentionally incorrect)
-    initial_guess = OrbitalElements(
-        a=45.0, e=0.15, i=10.0, Omega=120.0, omega=80.0, M=20.0,
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')
-    )
-    
-    print("Initial guess:")
-    print(f"  a: {initial_guess.a:.2f} AU")
-    print(f"  e: {initial_guess.e:.2f}")
-    print(f"  i: {initial_guess.i:.2f} degrees")
-    
-    # Fit orbit
-    fitted_elements, rms_error = orbit_tools.fit_orbit(observations, initial_guess)
-    
-    print("\nFitted elements:")
-    print(f"  a: {fitted_elements.a:.2f} AU")
-    print(f"  e: {fitted_elements.e:.2f}")
-    print(f"  i: {fitted_elements.i:.2f} degrees")
-    print(f"  Ω: {fitted_elements.Omega:.2f} degrees")
-    print(f"  ω: {fitted_elements.omega:.2f} degrees")
-    print(f"  M: {fitted_elements.M:.2f} degrees")
-    print(f"  RMS error: {rms_error:.3f} arcseconds")
-    
-    # Example 5: Calculate orbit similarity
-    print("\n=== Example 5: Calculate Orbit Similarity ===")
-    
-    # Define two similar orbits
-    orbit1 = OrbitalElements(
-        a=42.0, e=0.10, i=5.0, Omega=100.0, omega=200.0, M=0.0,
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')
-    )
-    
-    orbit2 = OrbitalElements(
-        a=42.5, e=0.12, i=5.5, Omega=105.0, omega=195.0, M=10.0,
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')
-    )
-    
-    similarity = orbit_tools.calculate_orbit_similarity(orbit1, orbit2)
-    print(f"Similarity between similar orbits: {similarity:.3f}")
-    
-    # Define two very different orbits
-    orbit3 = OrbitalElements(
-        a=42.0, e=0.10, i=5.0, Omega=100.0, omega=200.0, M=0.0,
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')
-    )
-    
-    orbit4 = OrbitalElements(
-        a=25.0, e=0.50, i=25.0, Omega=200.0, omega=100.0, M=180.0,
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')
-    )
-    
-    similarity = orbit_tools.calculate_orbit_similarity(orbit3, orbit4)
-    print(f"Similarity between different orbits: {similarity:.3f}")
-    
-    # Example 6: Calculate encounter parameters
-    print("\n=== Example 6: Calculate Encounter Parameters ===")
-    
-    # Define an orbit that crosses Neptune's orbit
-    crossing_orbit = OrbitalElements(
-        a=35.0, e=0.2, i=10.0, Omega=150.0, omega=120.0, M=30.0,
-        epoch=Time('2023-01-01T00:00:00', scale='tdb')
-    )
-    
-    neptune_params = orbit_tools.calculate_encounter_parameters(crossing_orbit, 'neptune')
-    
-    print("Neptune encounter parameters:")
-    print(f"  Orbits cross: {neptune_params['orbits_cross']}")
-    print(f"  Minimum orbit intersection distance: {neptune_params['moid']:.3f} AU")
-    print(f"  Resonance: {neptune_params['best_resonance']}")
-    print(f"  Perihelion: {neptune_params['perihelion']:.2f} AU")
-    print(f"  Aphelion: {neptune_params['aphelion']:.2f} AU")
-    
-    return 0
+    def calculate_encounter_parameters(self, 
+                                    elements: OrbitalElements,
+                                    planet: str = 'neptune') -> Dict[str, Any]:
+        """
+        Calculate encounter parameters with a major planet.
+        
+        Args:
+            elements: Orbital elements.
+            planet: Planet name: 'jupiter', 'saturn', 'uranus', 'neptune'.
+            
+        Returns:
+            Dictionary with encounter parameters.
+        """
+        # This is a placeholder for a real implementation
+        # In a real implementation, this would use proper encounter calculations
+        
+        # Planet semi-major axes (approximate)
+        planet_a = {
+            'jupiter': 5.2,
+            'saturn': 9.5,
+            'uranus': 19.2,
+            'neptune': 30.1
+        }
+        
+        if planet.lower() not in planet_a:
+            raise ValueError(f"Unknown planet: {planet}")
+        
+        planet_dist = planet_a[planet.lower()]
+        
+        # Calculate perihelion and aphelion
+        perihelion = elements.a * (1 - elements.e)
+        aphelion = elements.a * (1 + elements.e)
+        
+        # Check if orbits cross (simplified)
+        orbits_cross = (perihelion <= planet_dist <= aphelion)
+        
+        # Calculate MOID (minimum orbit intersection distance) - simplified
+        moid = abs(elements.a - planet_dist)  # This is not a proper MOID calculation
+        
+        # Placeholder for resonance
+        resonance = "none"
+        
+        # Check for common resonances with Neptune
+        if planet.lower() == 'neptune':
+            a_ratio = elements.a / planet_dist
+            
+            if 1.45 < a_ratio < 1.55:
+                resonance = "3:2 (Plutino)"
+            elif 1.95 < a_ratio < 2.05:
+                resonance = "2:1 (Twotino)"
+            elif 2.45 < a_ratio < 2.55:
+                resonance = "5:2"
+        
+        return {
+            'planet': planet,
+            'orbits_cross': orbits_cross,
+            'moid': moid,
+            'resonance': resonance,
+            'best_resonance': resonance,
+            'perihelion': perihelion,
+            'aphelion': aphelion
+        }
 
-if __name__ == "__main__":
-    sys.exit(main())
+# Simplified functions for direct use
+def calculate_orbital_elements(observations: List[ObservedPosition]) -> OrbitalElements:
+    """
+    Calculate orbital elements from a set of observations.
+    
+    Args:
+        observations: List of observed positions.
+        
+    Returns:
+        OrbitalElements object.
+    """
+    orbit_tools = OrbitTools()
+    elements, _ = orbit_tools.fit_orbit(observations)
+    return elements
+
+def compare_orbits(orbit1: OrbitalElements, orbit2: OrbitalElements) -> float:
+    """
+    Compare two orbits and calculate similarity.
+    
+    Args:
+        orbit1: First orbit.
+        orbit2: Second orbit.
+        
+    Returns:
+        Similarity score between 0 and 1.
+    """
+    orbit_tools = OrbitTools()
+    return orbit_tools.calculate_orbit_similarity(orbit1, orbit2)

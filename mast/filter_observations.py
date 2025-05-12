@@ -21,19 +21,21 @@ from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-# Constants for filtering
-MIN_WAVELENGTH_UM = 5.0   # Minimum wavelength in microns
-MAX_WAVELENGTH_UM = 28.0  # Maximum wavelength in microns (MIRI range)
-MIN_EXPOSURE_TIME = 300   # Minimum exposure time in seconds
-FIELD_MATCH_RADIUS = 60   # Maximum radius in arcseconds to consider same field
-KBO_MOVEMENT_RATE = 3.0   # Typical KBO movement in arcsec/hour
-MIN_SEQ_INTERVAL = 0.5    # Minimum time between sequence images (hours)
-MAX_SEQ_INTERVAL = 48.0   # Maximum time between sequence images (hours)
-MIN_SEQUENCE_IMAGES = 2   # Minimum number of images in a sequence
+# Constants for filtering - UPDATED FOR OPTIMAL KBO DETECTION
+MIN_WAVELENGTH_UM = 10.0   # Updated: Minimum wavelength in microns (thermal emission)
+MAX_WAVELENGTH_UM = 25.0   # Updated: Maximum wavelength in microns (optimal for KBOs)
+MIN_EXPOSURE_TIME = 300    # Minimum exposure time in seconds
+MAX_EXPOSURE_TIME = 7200   # Maximum exposure time in seconds (2 hours - primarily to filter cal frames)
+FIELD_MATCH_RADIUS = 60    # Maximum radius in arcseconds to consider same field
+KBO_MOVEMENT_RATE = 3.0    # Typical KBO movement in arcsec/hour
+MIN_SEQ_INTERVAL = 2.0     # RELAXED: Minimum time between sequence images (hours)
+MAX_SEQ_INTERVAL = 24.0    # RELAXED: Maximum time between sequence images (hours)
+MIN_SEQUENCE_IMAGES = 2    # Minimum number of images in a sequence
 
-# Preferred MIRI filters for KBO detection
+# Preferred MIRI filters for KBO detection - UPDATED TO FOCUS ON 10-25 MICRON RANGE
 PREFERRED_FILTERS = [
-    'F560W', 'F770W', 'F1000W', 'F1130W', 'F1280W', 'F1500W', 'F1800W', 'F2100W', 'F2550W'
+    'F1000W', 'F1130W', 'F1280W', 'F1500W', 'F1800W', 'F2100W', 'F2550W'
+    # Removed F560W, F770W as they're below our optimal wavelength range
 ]
 
 # MIRI filter wavelengths (in microns)
@@ -89,7 +91,7 @@ def filter_by_intent(catalog, include_cal=False):
     return science_obs
 
 def filter_by_wavelength(catalog):
-    """Filter for desired wavelength range"""
+    """Filter for optimal KBO wavelength range (10-25 microns)"""
     wavelength_obs = []
     for obs in catalog:
         # Check if wavelength information exists
@@ -122,17 +124,16 @@ def filter_by_wavelength(catalog):
                 if any(preferred in filter_name for preferred in PREFERRED_FILTERS):
                     wavelength_obs.append(obs)
                     break
-        else:
-            # If we have no wavelength info but made it this far, better to include than exclude
-            wavelength_obs.append(obs)
-    
+                    
     print(f"Filter 3: Wavelength range {MIN_WAVELENGTH_UM}-{MAX_WAVELENGTH_UM}μm - {len(wavelength_obs)}/{len(catalog)} observations passed")
     return wavelength_obs
 
 def filter_by_exposure(catalog):
-    """Filter for minimum exposure time"""
-    exposure_obs = [obs for obs in catalog if obs.get('t_exptime', 0) >= MIN_EXPOSURE_TIME]
-    print(f"Filter 4: Minimum exposure {MIN_EXPOSURE_TIME}s - {len(exposure_obs)}/{len(catalog)} observations passed")
+    """Filter for appropriate exposure time range"""
+    exposure_obs = [obs for obs in catalog 
+                  if obs.get('t_exptime', 0) >= MIN_EXPOSURE_TIME and 
+                   (MAX_EXPOSURE_TIME is None or obs.get('t_exptime', 0) <= MAX_EXPOSURE_TIME)]
+    print(f"Filter 4: Exposure time {MIN_EXPOSURE_TIME}-{MAX_EXPOSURE_TIME}s - {len(exposure_obs)}/{len(catalog)} observations passed")
     return exposure_obs
 
 def filter_by_calib_level(catalog):
@@ -185,6 +186,25 @@ def group_by_field(catalog):
     print(f"Field grouping: Found {len(fields)} distinct fields")
     print(f"Fields with ≥{MIN_SEQUENCE_IMAGES} observations: {len(multi_obs_fields)}/{len(fields)}")
     
+    # NEW: Diagnostic info about time distributions
+    print("\nTime interval analysis for multi-observation fields:")
+    for field_id, data in multi_obs_fields.items():
+        obs_times = []
+        for obs in data['observations']:
+            if 't_min' in obs:
+                obs_times.append(obs['t_min'])
+        
+        if len(obs_times) >= 2:
+            obs_times.sort()
+            intervals = []
+            for i in range(1, len(obs_times)):
+                interval_hrs = (obs_times[i] - obs_times[i-1]) * 24.0
+                intervals.append(interval_hrs)
+            
+            print(f"  {field_id}: {len(data['observations'])} observations")
+            print(f"    Time intervals (hours): {[f'{x:.1f}' for x in intervals]}")
+            print(f"    Min interval: {min(intervals):.1f} hours, Max interval: {max(intervals):.1f} hours")
+    
     return fields, multi_obs_fields
 
 def identify_sequences(fields):
@@ -212,6 +232,16 @@ def identify_sequences(fields):
             
         # Sort by time
         obs_with_time.sort(key=lambda x: x[1].mjd)
+        
+        # NEW: Print time intervals for diagnostic purposes
+        print(f"\nSequence analysis for {field_id}:")
+        all_intervals = []
+        for i in range(1, len(obs_with_time)):
+            prev_time = obs_with_time[i-1][1]
+            current_time = obs_with_time[i][1]
+            hours_diff = (current_time.mjd - prev_time.mjd) * 24.0
+            all_intervals.append(hours_diff)
+            print(f"  Interval {i}: {hours_diff:.2f} hours - {'VALID' if MIN_SEQ_INTERVAL <= hours_diff <= MAX_SEQ_INTERVAL else 'INVALID'}")
         
         # Find sequences with appropriate time intervals
         current_sequence = [obs_with_time[0]]
@@ -272,7 +302,7 @@ def identify_sequences(fields):
     # Sort sequences by number of observations (descending)
     sequences.sort(key=lambda x: x['num_observations'], reverse=True)
     
-    print(f"Sequence identification: Found {len(sequences)} valid observation sequences")
+    print(f"\nSequence identification: Found {len(sequences)} valid observation sequences")
     if sequences:
         print(f"  - Longest sequence: {sequences[0]['num_observations']} observations over {sequences[0]['duration_hours']:.1f} hours")
         
@@ -339,6 +369,40 @@ def generate_visualizations(fields, sequences, output_dir):
     plt.grid(True, alpha=0.3)
     plt.savefig(os.path.join(output_dir, 'observation_fields.png'), dpi=150)
     
+    # NEW: Create visualization of time intervals
+    plt.figure(figsize=(12, 8))
+    field_intervals = []
+    field_names = []
+    
+    for field_id, data in fields.items():
+        if len(data['observations']) >= MIN_SEQUENCE_IMAGES:
+            obs_times = []
+            for obs in data['observations']:
+                if 't_min' in obs:
+                    obs_times.append(obs['t_min'])
+            
+            if len(obs_times) >= 2:
+                obs_times.sort()
+                intervals = []
+                for i in range(1, len(obs_times)):
+                    interval_hrs = (obs_times[i] - obs_times[i-1]) * 24.0
+                    intervals.append(interval_hrs)
+                
+                field_intervals.append(intervals)
+                field_names.append(field_id)
+    
+    if field_intervals:
+        plt.boxplot(field_intervals, labels=field_names)
+        plt.axhline(y=MIN_SEQ_INTERVAL, color='r', linestyle='-', label=f'Min interval: {MIN_SEQ_INTERVAL}h')
+        plt.axhline(y=MAX_SEQ_INTERVAL, color='g', linestyle='-', label=f'Max interval: {MAX_SEQ_INTERVAL}h')
+        plt.ylabel('Time intervals (hours)')
+        plt.title('Time Intervals Between Observations by Field')
+        plt.xticks(rotation=45)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'field_time_intervals.png'), dpi=150)
+    
     if sequences:
         # Plotting sequence durations
         plt.figure(figsize=(10, 6))
@@ -375,11 +439,42 @@ def generate_visualizations(fields, sequences, output_dir):
     
     print(f"Visualizations saved to {output_dir}")
 
+def filter_fields_by_ecliptic(fields, max_ecliptic_latitude=5.0):
+    """
+    Filter fields to keep only those close to the ecliptic plane
+    
+    Parameters:
+    -----------
+    fields : dict
+        Dictionary of field data
+    max_ecliptic_latitude : float
+        Maximum absolute ecliptic latitude in degrees
+        
+    Returns:
+    --------
+    dict
+        Filtered fields dictionary
+    """
+    filtered_fields = {}
+    
+    for field_id, field_data in fields.items():
+        # Convert equatorial coordinates to ecliptic
+        eq_coord = field_data['center_coord']
+        ec_coord = eq_coord.transform_to('ecliptic')
+        
+        # Check if within required ecliptic latitude range
+        if abs(ec_coord.lat.deg) <= max_ecliptic_latitude:
+            filtered_fields[field_id] = field_data
+    
+    print(f"Ecliptic filter: Kept {len(filtered_fields)}/{len(fields)} fields within {max_ecliptic_latitude}° of ecliptic")
+    
+    return filtered_fields
+
 def main():
     import argparse
     
     # Global declarations must come before usage
-    global MIN_EXPOSURE_TIME, MIN_WAVELENGTH_UM, MAX_WAVELENGTH_UM
+    global MIN_EXPOSURE_TIME, MAX_EXPOSURE_TIME, MIN_WAVELENGTH_UM, MAX_WAVELENGTH_UM, MIN_SEQ_INTERVAL, MAX_SEQ_INTERVAL
     
     # Set up command line arguments
     parser = argparse.ArgumentParser(description='Filter JWST observations for KBO hunting')
@@ -388,21 +483,41 @@ def main():
                        help='Directory to save filtered catalog and visualizations (default: ../data)')
     parser.add_argument('--min-exposure', '-e', type=float, default=MIN_EXPOSURE_TIME,
                        help=f'Minimum exposure time in seconds (default: {MIN_EXPOSURE_TIME})')
+    parser.add_argument('--max-exposure', '-E', type=float, default=MAX_EXPOSURE_TIME,
+                       help=f'Maximum exposure time in seconds (default: {MAX_EXPOSURE_TIME})')
     parser.add_argument('--min-wavelength', '-wl', type=float, default=MIN_WAVELENGTH_UM,
                        help=f'Minimum wavelength in microns (default: {MIN_WAVELENGTH_UM})')
     parser.add_argument('--max-wavelength', '-wh', type=float, default=MAX_WAVELENGTH_UM,
                        help=f'Maximum wavelength in microns (default: {MAX_WAVELENGTH_UM})')
+    parser.add_argument('--min-interval', '-i', type=float, default=MIN_SEQ_INTERVAL,
+                       help=f'Minimum time interval between observations in hours (default: {MIN_SEQ_INTERVAL})')
+    parser.add_argument('--max-interval', '-I', type=float, default=MAX_SEQ_INTERVAL,
+                       help=f'Maximum time interval between observations in hours (default: {MAX_SEQ_INTERVAL})')
     parser.add_argument('--include-nircam', action='store_true',
                        help='Include NIRCam observations in addition to MIRI')
     parser.add_argument('--include-cal', action='store_true',
                        help='Include calibration observations (excluding darks/flats)')
+    parser.add_argument('--ecliptic-filter', type=float, default=None,
+                       help='Filter fields by maximum ecliptic latitude in degrees')
+    parser.add_argument('--relaxed', action='store_true',
+                       help='Use relaxed time interval constraints (0.5-48 hours instead of default)')
     
     args = parser.parse_args()
     
     # Update global parameters if specified on command line
     MIN_EXPOSURE_TIME = args.min_exposure
+    if args.max_exposure is not None:
+        MAX_EXPOSURE_TIME = args.max_exposure
     MIN_WAVELENGTH_UM = args.min_wavelength
     MAX_WAVELENGTH_UM = args.max_wavelength
+    MIN_SEQ_INTERVAL = args.min_interval
+    MAX_SEQ_INTERVAL = args.max_interval
+    
+    # Override with relaxed parameters if specified
+    if args.relaxed:
+        MIN_SEQ_INTERVAL = 0.5  # 30 minutes
+        MAX_SEQ_INTERVAL = 48.0  # 2 days
+        print("Using relaxed time interval constraints: 0.5-48 hours")
     
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
@@ -425,6 +540,10 @@ def main():
     # Group by field and identify sequences
     print("\nGrouping observations by field...")
     fields, multi_obs_fields = group_by_field(filtered_catalog)
+    
+    # Optional: Filter fields by ecliptic latitude
+    if args.ecliptic_filter is not None:
+        multi_obs_fields = filter_fields_by_ecliptic(multi_obs_fields, args.ecliptic_filter)
     
     print("\nIdentifying observation sequences...")
     sequences = identify_sequences(multi_obs_fields)

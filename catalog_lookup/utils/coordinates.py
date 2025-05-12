@@ -219,32 +219,6 @@ def format_target_for_mpc(ra: float, dec: float, epoch: Time) -> Dict[str, Any]:
         "date": epoch.iso.split()[0]  # Just the date part
     }
 
-def orbital_elements_to_position(elements: Dict[str, float], 
-                               epoch: Time) -> Tuple[float, float]:
-    """
-    Convert orbital elements to sky position.
-    
-    This is a simplified implementation that doesn't handle the full
-    complexity of KBO orbits. For production use, consider using
-    the jplephem package or similar.
-    
-    Args:
-        elements: Dictionary of orbital elements (a, e, i, Omega, omega, M).
-        epoch: Time for which to calculate the position.
-        
-    Returns:
-        Tuple of (RA in decimal degrees, Dec in decimal degrees)
-    """
-    # This would require a complex implementation of orbital mechanics
-    # For a real implementation, use a specialized package like jplephem
-    # or call the JPL HORIZONS service through astroquery
-    
-    # Placeholder for real implementation
-    raise NotImplementedError(
-        "Full orbital elements to position conversion requires specialized packages. "
-        "Consider using jplephem or astroquery.jplhorizons for this functionality."
-    )
-
 def estimate_rate_of_motion(distance_au: float) -> float:
     """
     Estimate typical rate of motion for a KBO at a given distance.

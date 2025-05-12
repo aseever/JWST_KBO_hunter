@@ -10,10 +10,8 @@ Main components:
 - OrbitTools: Performs orbital calculations and matching
 """
 
-# Import core components
-from catalog_lookup.core.query_manager import QueryManager, lookup_candidate, lookup_candidates
-from catalog_lookup.core.match_evaluator import MatchEvaluator, evaluate_match, calculate_match_score
-from catalog_lookup.core.orbit_tools import OrbitTools, calculate_orbital_elements, compare_orbits
+# We'll import these components as they're implemented
+# For now, just define the constants
 
 # Constants used throughout the package
 MATCH_THRESHOLDS = {
@@ -36,16 +34,8 @@ MOTION_TOLERANCES = {
     'loose': 3.0     # Loose motion rate matching
 }
 
+# List of public exports will be updated as implementations progress
 __all__ = [
-    'QueryManager',
-    'lookup_candidate',
-    'lookup_candidates',
-    'MatchEvaluator',
-    'evaluate_match',
-    'calculate_match_score',
-    'OrbitTools',
-    'calculate_orbital_elements',
-    'compare_orbits',
     'MATCH_THRESHOLDS',
     'POSITION_TOLERANCES',
     'MOTION_TOLERANCES'

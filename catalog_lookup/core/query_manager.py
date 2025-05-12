@@ -28,7 +28,7 @@ from catalog_lookup.utils.coordinates import (
     degrees_to_hms, hms_to_degrees, calculate_separation,
     format_target_for_mpc, format_target_for_skybot
 )
-from catalog_lookup.utils.cache import QueryCache, cached
+from catalog_lookup.utils.cache import QueryCache, cached, default_cache
 from catalog_lookup.utils.rate_limiter import (
     mpc_rate_limiter, jpl_rate_limiter, skybot_rate_limiter, panstarrs_rate_limiter
 )
@@ -44,14 +44,14 @@ class QueryManager:
     across multiple catalogs, consolidating the results and applying intelligent
     caching and rate limiting.
     """
-    
     def __init__(self, 
-                 cache_dir: Optional[str] = None,
-                 ossos_data_dir: Optional[str] = None,
-                 parallel_queries: bool = True,
-                 max_workers: int = 4,
-                 timeout: int = 60,
-                 verbose: bool = False):
+                cache_dir: Optional[str] = None,
+                ossos_data_dir: Optional[str] = None,
+                parallel_queries: bool = True,
+                max_workers: int = 4,
+                timeout: int = 60,
+                verbose: bool = False,
+                disabled_catalogs: Optional[List[str]] = None):
         """
         Initialize the query manager with catalog clients.
         
@@ -62,12 +62,17 @@ class QueryManager:
             max_workers: Maximum number of worker threads for parallel queries.
             timeout: Request timeout in seconds.
             verbose: Whether to log verbose output.
+            disabled_catalogs: List of catalog names to disable API calls for.
+                            If None, all catalogs are enabled.
         """
         self.cache_dir = cache_dir
         self.parallel_queries = parallel_queries
         self.max_workers = max_workers
         self.timeout = timeout
         self.verbose = verbose
+        
+        # Store disabled catalogs
+        self.disabled_catalogs = disabled_catalogs or []
         
         # Set up cache
         self.cache = QueryCache(cache_dir=cache_dir)
@@ -82,22 +87,27 @@ class QueryManager:
         # OSSOS client may take longer to initialize if it needs to download data
         logger.info("Initializing OSSOS client (may take a moment if downloading data)...")
         self.ossos_client = OSSOSClient(data_dir=ossos_data_dir, 
-                                       timeout=timeout, 
-                                       download_if_missing=True)
+                                    timeout=timeout, 
+                                    download_if_missing=True)
         
         # Initialize result storage
         self.last_query_time = None
         self.last_query_results = {}
         
+        # Log which catalogs are disabled
+        if self.disabled_catalogs:
+            logger.info(f"The following catalogs are disabled: {', '.join(self.disabled_catalogs)}")
+        
         logger.info("Query manager initialized successfully")
+
     
     def search_by_coordinates(self, 
-                             ra: float, 
-                             dec: float,
-                             radius: float = 1.0,
-                             epoch: Optional[Union[str, Time]] = None,
-                             catalogs: Optional[List[str]] = None,
-                             combine_results: bool = True) -> Dict[str, Any]:
+                            ra: float, 
+                            dec: float,
+                            radius: float = 1.0,
+                            epoch: Optional[Union[str, Time]] = None,
+                            catalogs: Optional[List[str]] = None,
+                            combine_results: bool = True) -> Dict[str, Any]:
         """
         Search for objects near specified coordinates across catalogs.
         
@@ -107,7 +117,7 @@ class QueryManager:
             radius: Search radius in degrees.
             epoch: Observation time. If None, uses current time.
             catalogs: List of catalogs to query. If None, queries all.
-                     Options: 'mpc', 'jpl', 'skybot', 'panstarrs', 'ossos'.
+                    Options: 'mpc', 'jpl', 'skybot', 'panstarrs', 'ossos'.
             combine_results: Whether to combine results into a unified format.
             
         Returns:
@@ -123,26 +133,43 @@ class QueryManager:
         if catalogs is None:
             catalogs = ['mpc', 'jpl', 'skybot', 'panstarrs', 'ossos']
         
+        # Apply disabled catalogs filter
+        active_catalogs = [cat for cat in catalogs if cat not in self.disabled_catalogs]
+        
+        # Log which catalogs are being skipped for this query
+        skipped_catalogs = [cat for cat in catalogs if cat in self.disabled_catalogs]
+        if skipped_catalogs:
+            logger.info(f"Skipping disabled catalogs: {', '.join(skipped_catalogs)}")
+        
         # Prepare query functions
         query_functions = {}
-        if 'mpc' in catalogs:
+        
+        # Only prepare functions for active catalogs
+        if 'mpc' in active_catalogs:
             query_functions['mpc'] = self._query_mpc_coordinates
-        if 'jpl' in catalogs:
+        if 'jpl' in active_catalogs:
             query_functions['jpl'] = self._query_jpl_coordinates
-        if 'skybot' in catalogs:
+        if 'skybot' in active_catalogs:
             query_functions['skybot'] = self._query_skybot_coordinates
-        if 'panstarrs' in catalogs:
+        if 'panstarrs' in active_catalogs:
             query_functions['panstarrs'] = self._query_panstarrs_coordinates
-        if 'ossos' in catalogs:
+        if 'ossos' in active_catalogs:
             query_functions['ossos'] = self._query_ossos_coordinates
         
-        # Execute queries
-        if self.parallel_queries and len(query_functions) > 1:
-            results = self._execute_parallel_queries(
-                query_functions, ra, dec, radius, epoch)
-        else:
-            results = self._execute_sequential_queries(
-                query_functions, ra, dec, radius, epoch)
+        # Create empty results for disabled catalogs
+        results = {cat: {'info': 'Catalog disabled', 'objects': []} for cat in skipped_catalogs}
+        
+        # Execute queries for active catalogs
+        if query_functions:
+            if self.parallel_queries and len(query_functions) > 1:
+                active_results = self._execute_parallel_queries(
+                    query_functions, ra, dec, radius, epoch)
+            else:
+                active_results = self._execute_sequential_queries(
+                    query_functions, ra, dec, radius, epoch)
+            
+            # Merge results
+            results.update(active_results)
         
         # Store query information
         self.last_query_time = datetime.now()
@@ -155,7 +182,7 @@ class QueryManager:
             results['combined'] = combined
         
         return results
-    
+        
     def search_by_designation(self, 
                              designation: str,
                              catalogs: Optional[List[str]] = None,
@@ -1084,3 +1111,73 @@ class QueryManager:
             properties['aphelion'] = a * (1 + e)
         
         return properties
+
+# Helper function for direct candidate lookup
+def lookup_candidate(candidate, catalogs=None):
+    """
+    Look up a candidate in multiple catalogs.
+    
+    Args:
+        candidate: Dictionary with candidate data (must include 'ra' and 'dec').
+        catalogs: List of catalogs to query (default: all available).
+        
+    Returns:
+        Dictionary with lookup results.
+    """
+    # Create a temporary QueryManager
+    query_manager = QueryManager()
+    
+    # Extract position
+    ra = candidate.get('ra')
+    dec = candidate.get('dec')
+    
+    if ra is None or dec is None:
+        raise ValueError("Candidate must have 'ra' and 'dec' fields")
+    
+    # Extract epoch if available
+    epoch = candidate.get('epoch')
+    
+    # Perform search
+    search_radius = 0.1  # degrees
+    return query_manager.search_by_coordinates(
+        ra=ra, dec=dec, radius=search_radius, epoch=epoch, catalogs=catalogs)
+
+# Helper function for batch candidate lookup
+def lookup_candidates(candidates, catalogs=None, parallel=True):
+    """
+    Look up multiple candidates in catalogs.
+    
+    Args:
+        candidates: List of dictionaries with candidate data.
+        catalogs: List of catalogs to query (default: all available).
+        parallel: Whether to process candidates in parallel.
+        
+    Returns:
+        List of dictionaries with lookup results.
+    """
+    # Create a QueryManager with parallel querying if requested
+    query_manager = QueryManager(parallel_queries=parallel)
+    
+    results = []
+    
+    # Process each candidate
+    for candidate in candidates:
+        # Extract position
+        ra = candidate.get('ra')
+        dec = candidate.get('dec')
+        
+        if ra is None or dec is None:
+            results.append({'error': "Candidate must have 'ra' and 'dec' fields"})
+            continue
+        
+        # Extract epoch if available
+        epoch = candidate.get('epoch')
+        
+        # Perform search
+        search_radius = 0.1  # degrees
+        result = query_manager.search_by_coordinates(
+            ra=ra, dec=dec, radius=search_radius, epoch=epoch, catalogs=catalogs)
+        
+        results.append(result)
+    
+    return results

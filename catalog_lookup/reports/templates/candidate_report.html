@@ -124,7 +124,7 @@
             </tr>
             <tr>
                 <th>Position (RA, Dec)</th>
-                <td>{{ "%.6f"|format(candidate.ra) }}°, {{ "%.6f"|format(candidate.dec) }}°</td>
+                <td>{{ "%.6f"|format(candidate.ra) }}&deg;, {{ "%.6f"|format(candidate.dec) }}&deg;</td>
             </tr>
             <tr>
                 <th>Motion Rate</th>
@@ -132,7 +132,7 @@
             </tr>
             <tr>
                 <th>Motion Angle</th>
-                <td>{{ "%.1f"|format(candidate.motion_angle|default(0)) }}° ({{ "%.1f"|format((candidate.motion_angle|default(0) + 90) % 360) }}°PA)</td>
+                <td>{{ "%.1f"|format(candidate.motion_angle|default(0)) }}&deg; ({{ "%.1f"|format((candidate.motion_angle|default(0) + 90) % 360) }}&deg;PA)</td>
             </tr>
             <tr>
                 <th>Detection Time</th>

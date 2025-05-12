@@ -11,23 +11,24 @@ Main components:
 - MPCReporter: Formats potential discoveries for MPC submission
 """
 
-# Import reporting modules
+# Import only what currently exists in the reporter modules
+# Remove functions that haven't been implemented yet
 from catalog_lookup.reports.json_reporter import (
-    JSONReporter,
-    generate_json_report,
-    parse_json_report
+    JSONReporter
+    # generate_json_report,  # This function doesn't exist yet
+    # parse_json_report      # This function doesn't exist yet
 )
 
 from catalog_lookup.reports.html_reporter import (
-    HTMLReporter,
-    generate_html_report,
-    create_candidate_visualization
+    HTMLReporter
+    # generate_html_report,            # This function doesn't exist yet
+    # create_candidate_visualization   # This function doesn't exist yet
 )
 
 from catalog_lookup.reports.mpc_reporter import (
-    MPCReporter,
-    generate_mpc_report,
-    format_mpc_astrometry
+    MPCReporter
+    # generate_mpc_report,     # This function doesn't exist yet
+    # format_mpc_astrometry    # This function doesn't exist yet
 )
 
 # Report generation options
@@ -61,14 +62,8 @@ OBJECT_CLASSIFICATIONS = {
 
 __all__ = [
     'JSONReporter',
-    'generate_json_report',
-    'parse_json_report',
     'HTMLReporter',
-    'generate_html_report',
-    'create_candidate_visualization',
     'MPCReporter',
-    'generate_mpc_report',
-    'format_mpc_astrometry',
     'DEFAULT_REPORT_OPTIONS',
     'REPORT_TEMPLATES',
     'OBJECT_CLASSIFICATIONS'
