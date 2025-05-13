@@ -1,0 +1,190 @@
+{
+  "survey_name": "KBO_Ecliptic_Survey_20250512",
+  "start_date": "2025-05-12",
+  "boxes_searched": [
+    {
+      "box_id": "RA1.0-3.0_DEC7.7-13.7",
+      "ra_min": "01h00m00s",
+      "ra_max": "03h00m00s",
+      "dec_min": "+07d43m51s",
+      "dec_max": "+13d43m51s",
+      "ra_center": 2.0,
+      "dec_center": 10.730913968673871,
+      "priority": 2,
+      "status": "failed",
+      "error": "Process timed out after 2 hours"
+    },
+    {
+      "box_id": "RA2.5-4.5_DEC14.8-20.8",
+      "ra_min": "02h30m00s",
+      "ra_max": "04h30m00s",
+      "dec_min": "+14d45m57s",
+      "dec_max": "+20d45m57s",
+      "ra_center": 3.5,
+      "dec_center": 17.76598763628518,
+      "priority": 2,
+      "status": "failed",
+      "error": "Process interrupted by user"
+    },
+    {
+      "box_id": "RA11.5-13.5_DEC-5.7-0.3",
+      "ra_min": "11h30m00s",
+      "ra_max": "13h30m00s",
+      "dec_min": "-05d44m02s",
+      "dec_max": "+00d15m57s",
+      "ra_center": 12.5,
+      "dec_center": -2.734068881920748,
+      "priority": 2,
+      "status": "failed",
+      "error": "Process interrupted by user"
+    },
+    {
+      "box_id": "RA13.0-15.0_DEC-13.7--7.7",
+      "ra_min": "13h00m00s",
+      "ra_max": "15h00m00s",
+      "dec_min": "-13d43m51s",
+      "dec_max": "-07d43m51s",
+      "ra_center": 14.0,
+      "dec_center": -10.730888600719656,
+      "priority": 2,
+      "status": "failed",
+      "error": "2025-05-12 19:47:41,959 - INFO - Starting KBO detection pipeline\n2025-05-12 19:47:41,959 - INFO - Using coordinate configuration: config/coordinates.txt\n2025-05-12 19:47:41,959 - INFO - Base output directory: data/ecliptic_survey_results\\RA13.0-15.0_DEC-13.7--7.7\n2025-05-12 19:47:41,959 - INFO - \n=== STEP 1: SEARCH ===\n2025-05-12 19:47:42,871 - ERROR - Failed to import required modules: cannot import name 'prioritize_squares' from 'mast.search' (C:\\Users\\aseev\\JWST_KBO_hunter\\mast\\search.py)\n2025-05-12 19:47:42,871 - ERROR - Please ensure mast package is installed correctly\n2025-05-12 19:47:42,871 - ERROR - Search step failed, aborting pipeline\n"
+    }
+  ],
+  "next_boxes": [
+    {
+      "box_id": "RA23.5-1.5_DEC-0.3-5.7",
+      "ra_min": "23h30m00s",
+      "ra_max": "01h30m00s",
+      "dec_min": "-00d15m57s",
+      "dec_max": "+05d44m02s",
+      "ra_center": 0.5,
+      "dec_center": 2.7340684938749646,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA4.0-6.0_DEC19.4-25.4",
+      "ra_min": "04h00m00s",
+      "ra_max": "06h00m00s",
+      "dec_min": "+19d26m48s",
+      "dec_max": "+25d26m48s",
+      "ra_center": 5.0,
+      "dec_center": 22.44693342432834,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA5.5-7.5_DEC20.2-26.2",
+      "ra_min": "05h30m00s",
+      "ra_max": "07h30m00s",
+      "dec_min": "+20d11m15s",
+      "dec_max": "+26d11m15s",
+      "ra_center": 6.5,
+      "dec_center": 23.18763106158833,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA7.0-9.0_DEC16.7-22.7",
+      "ra_min": "07h00m00s",
+      "ra_max": "09h00m00s",
+      "dec_min": "+16d40m25s",
+      "dec_max": "+22d40m25s",
+      "ra_center": 8.0,
+      "dec_center": 19.67376566877856,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA8.5-10.5_DEC10.2-16.2",
+      "ra_min": "08h30m00s",
+      "ra_max": "10h30m00s",
+      "dec_min": "+10d14m14s",
+      "dec_max": "+16d14m14s",
+      "ra_center": 9.5,
+      "dec_center": 13.237239626008424,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA10.0-12.0_DEC2.4-8.4",
+      "ra_min": "10h00m00s",
+      "ra_max": "12h00m00s",
+      "dec_min": "+02d26m56s",
+      "dec_max": "+08d26m56s",
+      "ra_center": 11.0,
+      "dec_center": 5.449091305125544,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA14.5-16.5_DEC-20.8--14.8",
+      "ra_min": "14h30m00s",
+      "ra_max": "16h30m00s",
+      "dec_min": "-20d45m57s",
+      "dec_max": "-14d45m57s",
+      "ra_center": 15.5,
+      "dec_center": -17.76588102811336,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA16.0-18.0_DEC-25.4--19.4",
+      "ra_min": "16h00m00s",
+      "ra_max": "18h00m00s",
+      "dec_min": "-25d26m48s",
+      "dec_max": "-19d26m48s",
+      "ra_center": 17.0,
+      "dec_center": -22.446829895307854,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA17.5-19.5_DEC-26.2--20.2",
+      "ra_min": "17h30m00s",
+      "ra_max": "19h30m00s",
+      "dec_min": "-26d11m15s",
+      "dec_max": "-20d11m15s",
+      "ra_center": 18.5,
+      "dec_center": -23.187690145254944,
+      "priority": 2,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA19.0-21.0_DEC-22.7--16.7",
+      "ra_min": "19h00m00s",
+      "ra_max": "21h00m00s",
+      "dec_min": "-22d40m26s",
+      "dec_max": "-16d40m26s",
+      "ra_center": 20.0,
+      "dec_center": -19.67392393744925,
+      "priority": 2,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA20.5-22.5_DEC-16.2--10.2",
+      "ra_min": "20h30m00s",
+      "ra_max": "22h30m00s",
+      "dec_min": "-16d14m14s",
+      "dec_max": "-10d14m14s",
+      "ra_center": 21.5,
+      "dec_center": -13.237324399458588,
+      "priority": 1,
+      "status": "pending"
+    },
+    {
+      "box_id": "RA22.0-0.0_DEC-8.4--2.4",
+      "ra_min": "22h00m00s",
+      "ra_max": "00h00m00s",
+      "dec_min": "-08d26m56s",
+      "dec_max": "-02d26m56s",
+      "ra_center": 23.0,
+      "dec_center": -5.449101161445034,
+      "priority": 1,
+      "status": "pending"
+    }
+  ],
+  "findings": [],
+  "last_updated": "2025-05-12 19:47:42"
+}

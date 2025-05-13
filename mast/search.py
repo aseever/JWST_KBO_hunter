@@ -456,7 +456,7 @@ def process_square(square, status_dict, output_dir=None, timeout=300):
         
         # Get KBO-filtered products
         logger.info(f"Found {len(observations)} JWST observations in square {square_id}")
-        products = get_product_list(observations, filter_level=2, only_science=True)
+        products = get_product_list(observations, filter_level=2, only_science=False)
         
         if not products:
             logger.info(f"No suitable products found in square {square_id}")
@@ -660,3 +660,59 @@ def search_multiple_squares(squares, output_dir=None, max_concurrent=1, timeout=
             logger.info(f"Saved {len(sequences_with_data)} sequences to {sequences_file}")
     
     return combined_results
+    """
+Fix for missing prioritize_squares function in mast.search
+
+This is a patch to add the prioritize_squares function to mast.search.py,
+which is referenced in kbo_hunt.py but was previously only implemented in
+ecliptic_survey.py.
+"""
+
+def prioritize_squares(squares, ecliptic_priority=True):
+    """
+    Prioritize squares for searching based on criteria
+    
+    Parameters:
+    -----------
+    squares : list
+        List of square dictionaries
+    ecliptic_priority : bool
+        Whether to prioritize squares near the ecliptic plane
+        
+    Returns:
+    --------
+    list : List of squares sorted by priority (highest first)
+    """
+    # Import utilities for calculating ecliptic overlap
+    try:
+        from mast.utils import calculate_overlap_with_ecliptic
+        
+        if ecliptic_priority:
+            # Calculate ecliptic overlap for each square
+            for square in squares:
+                square['ecliptic_overlap'] = calculate_overlap_with_ecliptic(square)
+            
+            # Sort by ecliptic overlap (highest first)
+            return sorted(squares, key=lambda s: s.get('ecliptic_overlap', 0), reverse=True)
+        else:
+            # Default order (as provided)
+            return squares
+            
+    except ImportError:
+        # If utils module isn't available, use a simplified approach
+        if ecliptic_priority:
+            # Define a simple function to estimate ecliptic proximity
+            def estimate_ecliptic_proximity(square):
+                # The ecliptic is roughly at dec=0, with some variation
+                dec = square.get('center_dec', 0)
+                if dec is None:
+                    return 0
+                
+                # Higher score for squares closer to dec=0
+                return max(0, 1.0 - (abs(dec) / 10.0))
+            
+            # Sort by estimated ecliptic proximity
+            return sorted(squares, key=estimate_ecliptic_proximity, reverse=True)
+        else:
+            # Default order (as provided)
+            return squares

@@ -4,6 +4,9 @@ ecliptic_survey.py - Systematic KBO survey along the ecliptic
 
 This utility manages a systematic survey of the ecliptic plane for KBO detection,
 generating search boxes, tracking progress, and coordinating with kbo_hunt.py.
+
+The tool automates the survey workflow, prioritizing regions of interest and
+tracking completed areas to ensure comprehensive coverage of the ecliptic.
 """
 
 import os
@@ -12,25 +15,28 @@ import json
 import argparse
 import subprocess
 import logging
+import traceback
 from datetime import datetime
 import numpy as np
 from astropy.coordinates import SkyCoord, GeocentricTrueEcliptic
 import astropy.units as u
 
 # Setup logging
+os.makedirs('data', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("ecliptic_survey.log")
+        logging.FileHandler("data/ecliptic_survey.log")
     ]
 )
 logger = logging.getLogger('ecliptic_survey')
 
 # Constants
-DEFAULT_SURVEY_FILE = "ecliptic_survey_state.json"
+DEFAULT_SURVEY_FILE = "config/ecliptic_survey_state.json"
 DEFAULT_CONFIG_FILE = "config/coordinates.txt"
+DEFAULT_RESULTS_DIR = "data/ecliptic_survey_results"
 DEFAULT_OVERLAP = 0.25  # 25% overlap between boxes
 
 # Priority regions along the ecliptic (RA hours)
@@ -39,6 +45,13 @@ PRIORITY_ZONES = [
     (2.0, 4.0),    # Opposition in May 2025
     (12.0, 14.0),  # Away from galactic plane
     (18.5, 20.5)   # Known KBO-rich region
+]
+
+# KBO Hunt command configuration templates
+DEFAULT_PIPELINE_ARGS = [
+    "--ecliptic-priority",
+    "--visualize",
+    "--analyze"
 ]
 
 def format_ra(ra_hours):
@@ -174,6 +187,9 @@ def create_survey_file(filename=DEFAULT_SURVEY_FILE, overwrite=False):
         logger.error(f"Survey file {filename} already exists. Use --force to overwrite.")
         return None
     
+    # Create config directory if it doesn't exist
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
     # Generate search boxes along the ecliptic
     boxes = generate_ecliptic_grid(
         ra_start=0.5,
@@ -190,7 +206,8 @@ def create_survey_file(filename=DEFAULT_SURVEY_FILE, overwrite=False):
         'start_date': datetime.now().strftime('%Y-%m-%d'),
         'boxes_searched': [],
         'next_boxes': boxes,
-        'findings': []
+        'findings': [],
+        'created_with': f"ecliptic_survey.py (version 0.2.0)"
     }
     
     # Save to file
@@ -282,70 +299,149 @@ DEC_MAX = {box['dec_max']}"""
         logger.error(f"Error updating coordinates file: {e}")
         return False
 
-def run_kbo_hunt(box, pipeline_args=None):
+def run_kbo_hunt(box, args=None, results_dir=None):
     """
-    Run the KBO hunt pipeline on a search box
+    Run the KBO hunt pipeline on a search box using the refactored version
     
     Parameters:
     -----------
     box : dict
         Search box dictionary
-    pipeline_args : list or None
+    args : list or None
         Additional arguments to pass to kbo_hunt.py
+    results_dir : str or None
+        Directory to store results
         
     Returns:
     --------
     dict : Results from the pipeline
     """
     try:
+        # Set up output directory specific to this box
+        box_dir = box['box_id']
+        if results_dir:
+            output_dir = os.path.join(results_dir, box_dir)
+        else:
+            output_dir = os.path.join(DEFAULT_RESULTS_DIR, box_dir)
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
         # Construct the command
-        cmd = ["python", "kbo_hunt.py", "pipeline", "--config", DEFAULT_CONFIG_FILE]
+        cmd = [
+            sys.executable, 
+            "kbo_hunt.py", 
+            "pipeline", 
+            "--config", DEFAULT_CONFIG_FILE,
+            "--output-dir", output_dir
+        ]
         
         # Add any additional arguments
-        if pipeline_args:
-            cmd.extend(pipeline_args)
+        if args:
+            cmd.extend(args)
         
         # Run the command
         logger.info(f"Running KBO hunt pipeline for box {box['box_id']}")
         logger.info(f"Command: {' '.join(cmd)}")
         
-        # Capture the output
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Run the process with real-time output forwarding
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Redirect stderr to stdout to keep log ordering
+            text=True,
+            bufsize=1  # Line buffered
+        )
         
-        if result.returncode != 0:
-            logger.error(f"Pipeline failed with return code {result.returncode}")
-            logger.error(f"Error output: {result.stderr}")
+        # Capture and forward output in real time
+        output_lines = []
+        
+        # Process output in real time
+        for line in iter(process.stdout.readline, ''):
+            if not line:
+                break
+            line = line.rstrip()
+            print(f"KBO_HUNT: {line}")  # Print to console
+            output_lines.append(line)
+        
+        # Wait for process to complete
+        return_code = process.wait()
+        
+        # Combine captured output
+        output = '\n'.join(output_lines)
+        
+        if return_code != 0:
+            logger.error(f"Pipeline failed with return code {return_code}")
             return {
                 'success': False,
-                'error': result.stderr,
-                'output': result.stdout
+                'error': "Pipeline execution failed",
+                'output': output,
+                'output_dir': output_dir,
+                'box_id': box['box_id']
             }
         
         logger.info(f"Pipeline completed successfully")
         
-        # Parse output to find result file paths
-        output_lines = result.stdout.split('\n')
+        # Find all result files
         result_files = []
+        for root, dirs, files in os.walk(output_dir):
+            for file in files:
+                if file.endswith('.json'):
+                    result_files.append(os.path.join(root, file))
         
-        for line in output_lines:
-            if "combined_results_" in line and ".json" in line:
-                # Extract the path using simple string parsing
-                parts = line.split("combined_results_")
-                if len(parts) > 1:
-                    file_part = parts[1].split(".json")[0] + ".json"
-                    result_files.append(os.path.join("data", "search_", file_part))
+        # Look for visualization files
+        viz_files = []
+        viz_dir = os.path.join(output_dir, "visualizations")
+        if os.path.exists(viz_dir):
+            for file in os.listdir(viz_dir):
+                if file.endswith(('.png', '.jpg', '.svg')):
+                    viz_files.append(os.path.join(viz_dir, file))
         
+        # Get pipeline summary
+        pipeline_summary = None
+        for file in result_files:
+            if "pipeline_summary_" in file:
+                try:
+                    with open(file, 'r') as f:
+                        pipeline_summary = json.load(f)
+                    break
+                except:
+                    pass
+        
+        # Get sequenced data
+        sequences = []
+        for file in result_files:
+            if "sequences_" in file or "combined_results_" in file:
+                try:
+                    with open(file, 'r') as f:
+                        data = json.load(f)
+                        if 'sequences' in data:
+                            sequences = data['sequences']
+                        elif 'summary' in data and 'sequence_details' in data['summary']:
+                            sequences = data['summary']['sequence_details']
+                    break
+                except:
+                    pass
+        
+        # Build result summary
         return {
             'success': True,
-            'output': result.stdout,
-            'result_files': result_files
+            'output': output,
+            'result_files': result_files,
+            'visualization_files': viz_files,
+            'output_dir': output_dir,
+            'box_id': box['box_id'],
+            'pipeline_summary': pipeline_summary,
+            'sequences': sequences,
+            'num_sequences': len(sequences)
         }
         
     except Exception as e:
         logger.error(f"Error running KBO hunt pipeline: {e}")
+        traceback.print_exc()
         return {
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'box_id': box['box_id']
         }
 
 def process_pipeline_results(box, pipeline_result):
@@ -368,59 +464,51 @@ def process_pipeline_results(box, pipeline_result):
         box['error'] = pipeline_result.get('error', 'Unknown error')
         return box
     
-    # Load the results file if available
-    result_files = pipeline_result.get('result_files', [])
+    # Update box with basic result information
+    box['status'] = 'completed'
+    box['search_date'] = datetime.now().strftime('%Y-%m-%d')
+    box['output_dir'] = pipeline_result.get('output_dir')
+    box['result_files'] = pipeline_result.get('result_files', [])
     
-    if not result_files:
-        box['status'] = 'completed_no_results'
-        return box
+    # Check if there are sequences
+    sequences = pipeline_result.get('sequences', [])
+    box['sequences_found'] = len(sequences)
     
-    try:
-        # Load the most recent result file
-        result_file = result_files[-1]
-        with open(result_file, 'r') as f:
-            results = json.load(f)
+    # Process findings if we have sequences
+    if sequences:
+        box['has_findings'] = True
+        findings = []
         
-        # Extract the summary
-        summary = results.get('summary', {})
-        
-        # Update the box with results
-        box['status'] = 'completed'
-        box['search_date'] = datetime.now().strftime('%Y-%m-%d')
-        box['observations_found'] = summary.get('total_observations', 0)
-        box['kbo_candidates'] = summary.get('total_candidates', 0)
-        box['sequences_found'] = summary.get('total_sequences', 0)
-        box['result_file'] = result_file
-        
-        # Extract sequences
-        sequences = summary.get('sequence_details', [])
-        
-        if sequences:
-            box['has_findings'] = True
-            findings = []
+        for seq in sequences:
+            finding = {
+                'box_id': box['box_id'],
+                'num_observations': seq.get('num_observations', 0),
+                'duration_hours': seq.get('duration_hours', 0),
+                'center_ra': seq.get('center_ra', box['ra_center']),
+                'center_dec': seq.get('center_dec', box['dec_center']),
+                'kbo_score': seq.get('kbo_score', 0),
+                'discovery_date': datetime.now().strftime('%Y-%m-%d')
+            }
             
-            for seq in sequences:
-                finding = {
-                    'box_id': box['box_id'],
-                    'num_observations': seq.get('num_observations', 0),
-                    'duration_hours': seq.get('duration_hours', 0),
-                    'center_ra': seq.get('center_ra', box['ra_center']),
-                    'center_dec': seq.get('center_dec', box['dec_center']),
-                    'discovery_date': datetime.now().strftime('%Y-%m-%d')
-                }
-                findings.append(finding)
+            # Add motion information if available
+            if 'expected_motion_arcsec' in seq:
+                finding['expected_motion_arcsec'] = seq['expected_motion_arcsec']
             
-            box['findings'] = findings
-        else:
-            box['has_findings'] = False
+            if 'approx_distance_au' in seq:
+                finding['approx_distance_au'] = seq['approx_distance_au']
+            
+            findings.append(finding)
         
-        return box
-        
-    except Exception as e:
-        logger.error(f"Error processing pipeline results: {e}")
-        box['status'] = 'completed_error'
-        box['error'] = str(e)
-        return box
+        box['findings'] = findings
+    else:
+        box['has_findings'] = False
+    
+    # Add visualization files 
+    visualization_files = pipeline_result.get('visualization_files', [])
+    if visualization_files:
+        box['visualization_files'] = visualization_files
+    
+    return box
 
 def update_survey_state(survey_state, box):
     """
@@ -457,6 +545,9 @@ def update_survey_state(survey_state, box):
     logger.info(f"  Progress: {boxes_done}/{boxes_total} boxes searched ({boxes_done/boxes_total*100:.1f}%)")
     logger.info(f"  Findings: {findings} potential KBO candidates")
     
+    # Update last modified timestamp
+    survey_state['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
     return survey_state
 
 def save_survey_state(survey_state, filename=DEFAULT_SURVEY_FILE):
@@ -475,6 +566,9 @@ def save_survey_state(survey_state, filename=DEFAULT_SURVEY_FILE):
     bool : True if successful, False otherwise
     """
     try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        
         with open(filename, 'w') as f:
             json.dump(survey_state, f, indent=2)
         
@@ -504,8 +598,8 @@ def get_next_box(survey_state):
     
     # Sort by priority (higher first)
     sorted_boxes = sorted(survey_state['next_boxes'], 
-                        key=lambda x: x.get('priority', 1), 
-                        reverse=True)
+                          key=lambda x: x.get('priority', 1), 
+                          reverse=True)
     
     # Return the highest priority box
     next_box = sorted_boxes[0]
@@ -513,7 +607,7 @@ def get_next_box(survey_state):
     
     return next_box
 
-def run_survey_iteration(survey_file=DEFAULT_SURVEY_FILE, pipeline_args=None):
+def run_survey_iteration(survey_file=DEFAULT_SURVEY_FILE, args=None, results_dir=None):
     """
     Run a single iteration of the survey
     
@@ -521,8 +615,10 @@ def run_survey_iteration(survey_file=DEFAULT_SURVEY_FILE, pipeline_args=None):
     -----------
     survey_file : str
         Path to the survey file
-    pipeline_args : list or None
+    args : list or None
         Additional arguments to pass to kbo_hunt.py
+    results_dir : str or None
+        Directory to store results
         
     Returns:
     --------
@@ -543,8 +639,12 @@ def run_survey_iteration(survey_file=DEFAULT_SURVEY_FILE, pipeline_args=None):
     if not update_coordinates_file(next_box):
         return False
     
+    # Set up pipeline arguments
+    if args is None:
+        args = DEFAULT_PIPELINE_ARGS.copy()
+    
     # Run the KBO hunt pipeline
-    pipeline_result = run_kbo_hunt(next_box, pipeline_args)
+    pipeline_result = run_kbo_hunt(next_box, args, results_dir)
     
     # Process the results
     processed_box = process_pipeline_results(next_box, pipeline_result)
@@ -560,7 +660,14 @@ def run_survey_iteration(survey_file=DEFAULT_SURVEY_FILE, pipeline_args=None):
     return True
 
 def print_survey_summary(survey_state):
-    """Print a summary of the survey progress"""
+    """
+    Print a summary of the survey progress
+    
+    Parameters:
+    -----------
+    survey_state : dict
+        Current survey state
+    """
     boxes_total = len(survey_state['boxes_searched']) + len(survey_state['next_boxes'])
     boxes_done = len(survey_state['boxes_searched'])
     findings = len(survey_state['findings'])
@@ -568,6 +675,7 @@ def print_survey_summary(survey_state):
     print("\n=== KBO Ecliptic Survey Summary ===")
     print(f"Survey: {survey_state['survey_name']}")
     print(f"Started: {survey_state['start_date']}")
+    print(f"Last updated: {survey_state.get('last_updated', 'Unknown')}")
     print(f"Progress: {boxes_done}/{boxes_total} boxes searched ({boxes_done/boxes_total*100:.1f}%)")
     print(f"Findings: {findings} potential KBO candidates")
     
@@ -576,21 +684,26 @@ def print_survey_summary(survey_state):
         for box in sorted(survey_state['boxes_searched'][-5:], 
                          key=lambda x: x.get('search_date', ''), reverse=True):
             status = box.get('status', 'unknown')
-            obs = box.get('observations_found', 0)
-            candidates = box.get('kbo_candidates', 0)
+            seqs = box.get('sequences_found', 0)
             date = box.get('search_date', 'unknown')
             
-            print(f"  {box['box_id']}: {status}, {obs} obs, {candidates} candidates ({date})")
+            print(f"  {box['box_id']}: {status}, {seqs} sequences ({date})")
     
     if survey_state['findings']:
-        print("\nPotential KBO candidates:")
-        for finding in survey_state['findings'][:5]:  # Show top 5
+        print("\nTop KBO candidates (by score):")
+        # Sort findings by score
+        top_findings = sorted(survey_state['findings'], 
+                             key=lambda x: x.get('kbo_score', 0), 
+                             reverse=True)[:5]
+        
+        for i, finding in enumerate(top_findings, 1):
             box_id = finding.get('box_id', 'unknown')
             num_obs = finding.get('num_observations', 0)
             duration = finding.get('duration_hours', 0)
+            score = finding.get('kbo_score', 0)
             date = finding.get('discovery_date', 'unknown')
             
-            print(f"  {box_id}: {num_obs} observations over {duration:.1f} hours ({date})")
+            print(f"  {i}. {box_id}: {num_obs} obs over {duration:.1f} hrs, score: {score:.2f} ({date})")
         
         if len(survey_state['findings']) > 5:
             print(f"  ... and {len(survey_state['findings'])-5} more")
@@ -607,7 +720,263 @@ def print_survey_summary(survey_state):
     print(f"  python ecliptic_survey.py --run")
     print()
 
+def generate_survey_report(survey_state, output_file=None):
+    """
+    Generate a comprehensive report of the survey findings
+    
+    Parameters:
+    -----------
+    survey_state : dict
+        Current survey state
+    output_file : str or None
+        Path to output report file
+        
+    Returns:
+    --------
+    str : Path to the generated report file
+    """
+    if output_file is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file = f"data/ecliptic_survey_report_{timestamp}.md"
+    
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
+    boxes_total = len(survey_state['boxes_searched']) + len(survey_state['next_boxes'])
+    boxes_done = len(survey_state['boxes_searched'])
+    findings = len(survey_state['findings'])
+    
+    # Generate report content
+    report = f"""# Ecliptic Survey Report
+## {survey_state['survey_name']}
+
+Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Summary
+- Survey started: {survey_state['start_date']}
+- Last updated: {survey_state.get('last_updated', 'Unknown')}
+- Progress: {boxes_done}/{boxes_total} boxes searched ({boxes_done/boxes_total*100:.1f}%)
+- Findings: {findings} potential KBO candidates
+
+## Top KBO Candidates
+
+| Rank | Box ID | Num Obs | Duration (hrs) | KBO Score | Est. Distance (AU) | Discovery Date |
+|------|--------|---------|----------------|-----------|-------------------|----------------|
+"""
+    
+    # Sort findings by score
+    sorted_findings = sorted(survey_state['findings'], 
+                            key=lambda x: x.get('kbo_score', 0), 
+                            reverse=True)
+    
+    # Add top candidates to report
+    for i, finding in enumerate(sorted_findings[:20], 1):
+        box_id = finding.get('box_id', 'unknown')
+        num_obs = finding.get('num_observations', 0)
+        duration = finding.get('duration_hours', 0)
+        score = finding.get('kbo_score', 0)
+        distance = finding.get('approx_distance_au', 'N/A')
+        date = finding.get('discovery_date', 'unknown')
+        
+        report += f"| {i} | {box_id} | {num_obs} | {duration:.1f} | {score:.2f} | {distance} | {date} |\n"
+    
+    # Add search coverage
+    report += f"""
+## Search Coverage
+
+| Status | Count | Percentage |
+|--------|-------|------------|
+| Completed | {boxes_done} | {boxes_done/boxes_total*100:.1f}% |
+| Pending | {len(survey_state['next_boxes'])} | {len(survey_state['next_boxes'])/boxes_total*100:.1f}% |
+| Total | {boxes_total} | 100% |
+
+## Visualization
+
+To visualize the survey coverage, you can use the following command:
+```
+python ecliptic_survey.py --visualize
+```
+
+## Next Steps
+
+To continue the survey, run:
+```
+python ecliptic_survey.py --run
+```
+
+To analyze specific findings, check the result directories for each box.
+"""
+    
+    # Write report to file
+    with open(output_file, 'w') as f:
+        f.write(report)
+    
+    logger.info(f"Generated survey report: {output_file}")
+    return output_file
+
+def visualize_survey_progress(survey_state, output_file=None):
+    """
+    Visualize the survey progress with matplotlib
+    
+    Parameters:
+    -----------
+    survey_state : dict
+        Current survey state
+    output_file : str or None
+        Path to output visualization file
+        
+    Returns:
+    --------
+    str : Path to the generated visualization file
+    """
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        
+        if output_file is None:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_file = f"data/ecliptic_survey_progress_{timestamp}.png"
+        
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        
+        # Create figure
+        plt.figure(figsize=(15, 8))
+        
+        # Plot ecliptic plane
+        ecliptic_lons = np.linspace(0, 360, 360)
+        ecliptic_lats = np.zeros_like(ecliptic_lons)
+        
+        # Convert to equatorial coordinates
+        ecliptic_coords = SkyCoord(
+            lon=ecliptic_lons * u.deg,
+            lat=ecliptic_lats * u.deg,
+            frame=GeocentricTrueEcliptic
+        )
+        
+        eq_coords = ecliptic_coords.transform_to('icrs')
+        
+        # Plot the ecliptic line
+        plt.plot(eq_coords.ra.hour, eq_coords.dec.deg, 'k--', alpha=0.5, label='Ecliptic')
+        
+        # Plot completed boxes
+        for box in survey_state['boxes_searched']:
+            ra_min = parse_ra(box['ra_min'])
+            ra_max = parse_ra(box['ra_max'])
+            dec_min = parse_dec(box['dec_min'])
+            dec_max = parse_dec(box['dec_max'])
+            
+            # Handle RA wraparound
+            if ra_min > ra_max:
+                ra_max += 24
+            
+            width = ra_max - ra_min
+            height = dec_max - dec_min
+            
+            if box.get('status') == 'completed':
+                color = 'green' if box.get('has_findings', False) else 'lightgreen'
+                alpha = 0.7 if box.get('has_findings', False) else 0.4
+            else:
+                color = 'red'  # Failed
+                alpha = 0.4
+            
+            rect = Rectangle(
+                (ra_min, dec_min), width, height,
+                edgecolor='black',
+                facecolor=color,
+                alpha=alpha,
+                label='_nolegend_'
+            )
+            plt.gca().add_patch(rect)
+            
+            # Add a marker for findings
+            if box.get('has_findings', False):
+                for finding in box.get('findings', []):
+                    ra = finding.get('center_ra')
+                    dec = finding.get('center_dec')
+                    score = finding.get('kbo_score', 0)
+                    size = 50 * score + 20  # Scale with score
+                    
+                    if ra is not None and dec is not None:
+                        # Convert RA from degrees to hours if needed
+                        if ra > 24:
+                            ra /= 15
+                            
+                        plt.scatter(
+                            ra, dec,
+                            marker='*',
+                            s=size,
+                            color='yellow',
+                            edgecolor='black',
+                            zorder=10,
+                            label='_nolegend_'
+                        )
+        
+        # Plot pending boxes
+        for box in survey_state['next_boxes']:
+            ra_min = parse_ra(box['ra_min'])
+            ra_max = parse_ra(box['ra_max'])
+            dec_min = parse_dec(box['dec_min'])
+            dec_max = parse_dec(box['dec_max'])
+            
+            # Handle RA wraparound
+            if ra_min > ra_max:
+                ra_max += 24
+            
+            width = ra_max - ra_min
+            height = dec_max - dec_min
+            
+            color = 'orange' if box.get('priority', 1) > 1 else 'lightgray'
+            alpha = 0.5 if box.get('priority', 1) > 1 else 0.3
+            
+            rect = Rectangle(
+                (ra_min, dec_min), width, height,
+                edgecolor='black',
+                facecolor=color,
+                alpha=alpha,
+                label='_nolegend_'
+            )
+            plt.gca().add_patch(rect)
+        
+        # Add legend items
+        plt.scatter([], [], c='green', alpha=0.7, s=100, label='Completed (with findings)')
+        plt.scatter([], [], c='lightgreen', alpha=0.4, s=100, label='Completed (no findings)')
+        plt.scatter([], [], c='red', alpha=0.4, s=100, label='Failed')
+        plt.scatter([], [], c='orange', alpha=0.5, s=100, label='Pending (high priority)')
+        plt.scatter([], [], c='lightgray', alpha=0.3, s=100, label='Pending')
+        plt.scatter([], [], c='yellow', marker='*', s=100, edgecolor='black', label='KBO candidate')
+        
+        # Set up the plot
+        plt.xlim(0, 24)
+        plt.xlabel('Right Ascension (hours)')
+        plt.ylabel('Declination (degrees)')
+        plt.title(f'Ecliptic Survey Progress - {survey_state["survey_name"]}')
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='upper right')
+        
+        # Add stats as text
+        boxes_total = len(survey_state['boxes_searched']) + len(survey_state['next_boxes'])
+        boxes_done = len(survey_state['boxes_searched'])
+        progress_text = f"Progress: {boxes_done}/{boxes_total} boxes ({boxes_done/boxes_total*100:.1f}%)"
+        findings_text = f"Findings: {len(survey_state['findings'])} potential KBO candidates"
+        
+        plt.figtext(0.02, 0.02, progress_text + '\n' + findings_text, 
+                   fontsize=10, bbox=dict(facecolor='white', alpha=0.7))
+        
+        # Save the figure
+        plt.savefig(output_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Generated survey visualization: {output_file}")
+        return output_file
+    
+    except ImportError:
+        logger.error("Cannot generate visualization: matplotlib not installed")
+        return None
+    except Exception as e:
+        logger.error(f"Error generating survey visualization: {e}")
+        return None
+
 def main():
+    """Main entry point for the script"""
     parser = argparse.ArgumentParser(description="Ecliptic KBO Survey Management Tool")
     
     # Main commands
@@ -619,6 +988,10 @@ def main():
                       help='Show survey status')
     parser.add_argument('--update-box', metavar='BOX_ID', 
                       help='Update coordinates.txt for a specific box ID')
+    parser.add_argument('--report', action='store_true',
+                      help='Generate survey report')
+    parser.add_argument('--visualize', action='store_true',
+                      help='Generate survey progress visualization')
     
     # Options
     parser.add_argument('--force', action='store_true', 
@@ -627,12 +1000,18 @@ def main():
                       help=f'Survey state file (default: {DEFAULT_SURVEY_FILE})')
     parser.add_argument('--config-file', default=DEFAULT_CONFIG_FILE, 
                       help=f'Coordinates config file (default: {DEFAULT_CONFIG_FILE})')
+    parser.add_argument('--results-dir', default=DEFAULT_RESULTS_DIR,
+                      help=f'Results directory (default: {DEFAULT_RESULTS_DIR})')
     
     # Pipeline options
     parser.add_argument('--download', action='store_true', 
                       help='Download files after search')
+    parser.add_argument('--analyze', action='store_true',
+                      help='Perform additional analysis')
     parser.add_argument('--ecliptic-priority', action='store_true',
-                      help='Pass --ecliptic-priority to kbo_hunt.py')
+                      help='Prioritize ecliptic proximity')
+    parser.add_argument('--visualize-results', action='store_true',
+                      help='Generate visualizations of results')
     
     args = parser.parse_args()
     
@@ -647,8 +1026,12 @@ def main():
             pipeline_args.append('--download')
         if args.ecliptic_priority:
             pipeline_args.append('--ecliptic-priority')
+        if args.analyze:
+            pipeline_args.append('--analyze')
+        if args.visualize_results:
+            pipeline_args.append('--visualize')
         
-        run_survey_iteration(args.survey_file, pipeline_args)
+        run_survey_iteration(args.survey_file, pipeline_args, args.results_dir)
     
     elif args.status:
         survey_state = load_survey_file(args.survey_file)
@@ -672,6 +1055,19 @@ def main():
             return
         
         update_coordinates_file(target_box, args.config_file)
+    
+    elif args.report:
+        survey_state = load_survey_file(args.survey_file)
+        if survey_state:
+            report_file = generate_survey_report(survey_state)
+            print(f"Report generated: {report_file}")
+    
+    elif args.visualize:
+        survey_state = load_survey_file(args.survey_file)
+        if survey_state:
+            viz_file = visualize_survey_progress(survey_state)
+            if viz_file:
+                print(f"Visualization generated: {viz_file}")
     
     else:
         parser.print_help()
