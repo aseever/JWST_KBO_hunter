@@ -268,10 +268,15 @@ def download_observation(observation, field_id, output_dir, status):
     --------
     bool : True if download successful, False otherwise
     """
-    # Extract download URL
-    download_url = observation.get('dataURL')
+    # Extract download URL - enhanced to support different field names
+    download_url = None
+    for url_field in ['dataURL', 'dataURI', 'data_url']:
+        if url_field in observation:
+            download_url = observation[url_field]
+            break
+            
     if not download_url:
-        logger.warning(f"No download URL for observation {observation.get('product_id', 'unknown')}")
+        logger.warning(f"No download URL for observation {observation.get('product_id', observation.get('obs_id', 'unknown'))}")
         return False
     
     # Check if already downloaded
@@ -286,7 +291,12 @@ def download_observation(observation, field_id, output_dir, status):
         
         # If no filename could be extracted, use the product ID or a generated name
         if not filename:
-            filename = observation.get('product_id', f"product_{len(status['completed_urls'])}.fits")
+            for id_field in ['product_id', 'obs_id', 'observationid']:
+                if id_field in observation:
+                    filename = observation[id_field]
+                    break
+            else:
+                filename = f"product_{len(status['completed_urls'])}.fits"
             
         # Ensure filename ends with .fits
         if not filename.lower().endswith('.fits'):
@@ -366,7 +376,7 @@ def process_sequence(sequence, output_dir, status, delay=1.0):
     
     return successful_downloads
 
-def download_from_catalog(catalog_file, output_dir, resume=False, delay=1.0):
+def download_from_catalog(catalog_file, output_dir=None, resume=False, delay=1.0):
     """
     Download FITS files from a catalog
     
@@ -390,20 +400,46 @@ def download_from_catalog(catalog_file, output_dir, resume=False, delay=1.0):
     # Load catalog
     try:
         catalog = load_json(catalog_file)
+        
+        # Handle different catalog formats
+        sequences = []
+        
         if isinstance(catalog, list):
             # List of sequences
             sequences = catalog
-        elif isinstance(catalog, dict) and 'results' in catalog:
+        elif isinstance(catalog, dict):
+            # Filter output format
+            if 'sequences' in catalog:
+                logger.info("Detected filter output format with sequences")
+                sequences = catalog['sequences']
             # Combined results format
-            sequences = []
-            for result in catalog['results']:
-                if 'observations' in result and result['observations']:
+            elif 'results' in catalog and isinstance(catalog['results'], list):
+                logger.info("Detected combined results format")
+                for result in catalog['results']:
+                    if 'observations' in result:
+                        sequences.append({
+                            'field_id': result.get('square_id', 'unknown'),
+                            'observations': result['observations']
+                        })
+            # Simple container with observations
+            elif 'observations' in catalog and isinstance(catalog['observations'], list):
+                logger.info("Detected simple container format with observations list")
+                # Group by field if possible
+                field_groups = {}
+                for obs in catalog['observations']:
+                    field_id = obs.get('field_id', 'unknown')
+                    if field_id not in field_groups:
+                        field_groups[field_id] = []
+                    field_groups[field_id].append(obs)
+                
+                # Convert groups to sequences
+                for field_id, obs_list in field_groups.items():
                     sequences.append({
-                        'field_id': result.get('square_id', 'unknown'),
-                        'center_ra': result.get('center_ra'),
-                        'center_dec': result.get('center_dec'),
-                        'observations': result['observations']
+                        'field_id': field_id,
+                        'observations': obs_list
                     })
+            else:
+                raise ValueError("Unknown catalog format")
         else:
             raise ValueError("Unknown catalog format")
         
@@ -530,11 +566,19 @@ def retry_failed_downloads(status_file_path, output_dir, delay=1.0):
                         for obs in result['observations']:
                             obs['field_id'] = field_id
                             all_observations.append(obs)
+            elif isinstance(catalog, dict) and 'sequences' in catalog:
+                # Filter output format
+                for seq in catalog['sequences']:
+                    if 'observations' in seq:
+                        field_id = seq.get('field_id', 'unknown')
+                        for obs in seq['observations']:
+                            obs['field_id'] = field_id
+                            all_observations.append(obs)
             
             # Match failed URLs to observations
             for url in failed_urls:
                 for obs in all_observations:
-                    if obs.get('dataURL') == url:
+                    if any(obs.get(url_field) == url for url_field in ['dataURL', 'dataURI', 'data_url']):
                         retry_items.append({
                             'url': url,
                             'field_id': obs.get('field_id', 'unknown'),

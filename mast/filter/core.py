@@ -89,44 +89,48 @@ except ImportError:
 
 def filter_by_instrument(observations, include_nircam=False):
     """
-    Filter for MIRI observations and optionally NIRCam observations
+    This function now passes through all observations as instrument filtering
+    is handled at the MAST query level
     
     Parameters:
     -----------
     observations : list
         List of observation dictionaries
     include_nircam : bool
-        Whether to include NIRCam observations
+        Parameter kept for backward compatibility, no longer used
         
     Returns:
     --------
-    list : Filtered observations
+    list : Same observations list (no filtering)
     """
     if not observations:
         logger.warning("No observations to filter by instrument")
         return []
 
     try:
-        if include_nircam:
-            instrument_obs = [obs for obs in observations 
-                            if 'instrument_name' in obs and 
-                            ('MIRI' in obs.get('instrument_name', '') or 
-                             'NIRCAM' in obs.get('instrument_name', ''))]
-            logger.info(f"MIRI or NIRCam instruments: {len(instrument_obs)}/{len(observations)} observations passed")
-        else:
-            instrument_obs = [obs for obs in observations 
-                            if 'instrument_name' in obs and 'MIRI' in obs.get('instrument_name', '')]
-            logger.info(f"MIRI instrument only: {len(instrument_obs)}/{len(observations)} observations passed")
+        # Log observation count but don't filter
+        logger.info(f"Instrument filtering disabled (handled by MAST query): passing {len(observations)} observations")
         
-        return instrument_obs
+        # Report instrument types found (for informational purposes)
+        instrument_types = {}
+        for obs in observations:
+            inst_name = obs.get('instrument_name', 'unknown')
+            instrument_types[inst_name] = instrument_types.get(inst_name, 0) + 1
+        
+        if instrument_types:
+            logger.info(f"Instrument types found: {instrument_types}")
+        
+        # Return all observations without filtering
+        return observations
     
     except Exception as e:
-        logger.error(f"Error filtering by instrument: {e}")
-        return observations  # Return original list in case of error
+        logger.error(f"Error in instrument type logging: {e}")
+        return observations
 
 def filter_by_wavelength(observations):
     """
-    Filter observations for optimal KBO wavelength range
+    This function now passes through all observations as wavelength filtering
+    is handled at the MAST query level
     
     Parameters:
     -----------
@@ -135,160 +139,75 @@ def filter_by_wavelength(observations):
         
     Returns:
     --------
-    list : Filtered observations
+    list : Same observations list (no filtering)
     """
     if not observations:
         logger.warning("No observations to filter by wavelength")
         return []
 
     try:
-        # Extract constants
-        min_wavelength = KBO_DETECTION_CONSTANTS['MIN_WAVELENGTH']
-        max_wavelength = KBO_DETECTION_CONSTANTS['MAX_WAVELENGTH']
-        preferred_filters = KBO_DETECTION_CONSTANTS['PREFERRED_FILTERS']
-        
-        wavelength_obs = []
-        
-        for obs in observations:
-            # Check if wavelength information exists
-            if 'wavelength_range' in obs and obs['wavelength_range']:
-                try:
-                    wavelength = obs['wavelength_range']
-                    if isinstance(wavelength, (list, tuple, np.ndarray)) and len(wavelength) >= 2:
-                        wl_min, wl_max = wavelength[0], wavelength[1]
-                        
-                        # Convert to microns if needed
-                        if wl_min < 1e-4 or wl_max < 1e-4:  # Likely in meters
-                            wl_min *= 1e6
-                            wl_max *= 1e6
-                        
-                        if wl_max >= min_wavelength and wl_min <= max_wavelength:
-                            wavelength_obs.append(obs)
-                            continue  # Skip checking filters
-                except (ValueError, TypeError, IndexError):
-                    # If we can't parse wavelength, don't exclude based on this
-                    pass
-            
-            # Check filters if available
-            if 'filters' in obs:
-                filter_name = str(obs.get('filters', ''))
-                if any(preferred in filter_name for preferred in preferred_filters):
-                    wavelength_obs.append(obs)
-                    continue
-            
-            # As a fallback, check instrument name for MIRI
-            if 'instrument_name' in obs and 'MIRI' in obs.get('instrument_name', ''):
-                # MIRI operates in the wavelength range we want
-                wavelength_obs.append(obs)
-        
-        logger.info(f"Wavelength range {min_wavelength}-{max_wavelength}μm: {len(wavelength_obs)}/{len(observations)} observations passed")
-        return wavelength_obs
+        logger.info(f"Wavelength filtering disabled (handled by MAST query): passing {len(observations)} observations")
+        return observations
     
     except Exception as e:
-        logger.error(f"Error filtering by wavelength: {e}")
-        return observations  # Return original list in case of error
+        logger.error(f"Error in wavelength filtering: {e}")
+        return observations
 
 def filter_by_exposure(observations, min_exposure_time=None):
     """
-    Filter for appropriate exposure time range
+    This function now passes through all observations as exposure filtering
+    is handled at the MAST query level
     
     Parameters:
     -----------
     observations : list
         List of observation dictionaries
     min_exposure_time : float or None
-        Minimum exposure time in seconds (overrides default from constants)
+        Parameter kept for backward compatibility, no longer used
         
     Returns:
     --------
-    list : Filtered observations
+    list : Same observations list (no filtering)
     """
     if not observations:
         logger.warning("No observations to filter by exposure time")
         return []
 
     try:
-        # Extract constants
-        if min_exposure_time is None:
-            min_exposure_time = KBO_DETECTION_CONSTANTS['MIN_EXPOSURE_TIME']
-        
-        # Find exposure time field (could be 't_exptime', 'exptime', etc.)
-        exposure_field = None
-        exposure_fields = ['t_exptime', 'exptime', 'exposure_time']
-        
-        if observations:
-            for field in exposure_fields:
-                if field in observations[0]:
-                    exposure_field = field
-                    break
-        
-        if not exposure_field:
-            logger.warning("No exposure time field found, skipping exposure filter")
-            return observations
-        
-        exposure_obs = [obs for obs in observations 
-                       if obs.get(exposure_field, 0) >= min_exposure_time]
-        
-        logger.info(f"Exposure time ≥{min_exposure_time}s: {len(exposure_obs)}/{len(observations)} observations passed")
-        return exposure_obs
+        logger.info(f"Exposure filtering disabled (handled by MAST query): passing {len(observations)} observations")
+        return observations
     
     except Exception as e:
-        logger.error(f"Error filtering by exposure time: {e}")
-        return observations  # Return original list in case of error
+        logger.error(f"Error in exposure filtering: {e}")
+        return observations
 
 def filter_by_ecliptic_latitude(observations, max_ecliptic_latitude=5.0):
     """
-    Filter observations by proximity to ecliptic plane
+    This function now passes through all observations as ecliptic latitude filtering
+    is handled at the MAST query level
     
     Parameters:
     -----------
     observations : list
         List of observation dictionaries
     max_ecliptic_latitude : float
-        Maximum absolute ecliptic latitude in degrees
+        Parameter kept for backward compatibility, no longer used
         
     Returns:
     --------
-    list : Filtered observations
+    list : Same observations list (no filtering)
     """
     if not observations:
         logger.warning("No observations to filter by ecliptic latitude")
         return []
 
     try:
-        # Find coordinate fields (could be 's_ra'/'s_dec', 'ra'/'dec', etc.)
-        ra_field, dec_field = None, None
-        coordinate_fields = [('s_ra', 's_dec'), ('ra', 'dec'), ('RA', 'DEC')]
-        
-        if observations:
-            for ra_f, dec_f in coordinate_fields:
-                if ra_f in observations[0] and dec_f in observations[0]:
-                    ra_field, dec_field = ra_f, dec_f
-                    break
-        
-        if not ra_field or not dec_field:
-            logger.warning("No coordinate fields found, skipping ecliptic filter")
-            return observations
-        
-        ecliptic_obs = []
-        
-        for obs in observations:
-            try:
-                ra = float(obs[ra_field])
-                dec = float(obs[dec_field])
-                
-                if is_near_ecliptic(ra, dec, max_ecliptic_latitude):
-                    ecliptic_obs.append(obs)
-            except (ValueError, TypeError):
-                # If coordinates can't be parsed, keep the observation
-                ecliptic_obs.append(obs)
-        
-        logger.info(f"Ecliptic latitude ≤{max_ecliptic_latitude}°: {len(ecliptic_obs)}/{len(observations)} observations passed")
-        return ecliptic_obs
+        logger.info(f"Ecliptic latitude filtering disabled (handled by MAST query): passing {len(observations)} observations")
+        return observations
     
     except Exception as e:
-        logger.error(f"Error filtering by ecliptic latitude: {e}")
-        return observations  # Return original list in case of error
+        logger.error(f"Error in ecliptic latitude filtering: {e}")
+        return observations
 
 def extract_observations_from_catalog(catalog):
     """
@@ -340,26 +259,33 @@ def extract_observations_from_catalog(catalog):
 def filter_observations(observations, include_nircam=False, 
                       max_ecliptic_latitude=5.0, min_exposure_time=None):
     """
-    Apply all filters to a set of observations
+    Apply all filters to a set of observations - currently disabled as filtering
+    is handled at the MAST query level
     
     Parameters:
     -----------
     observations : list
         List of observation dictionaries
     include_nircam : bool
-        Whether to include NIRCam observations
+        Parameter kept for backward compatibility
     max_ecliptic_latitude : float
-        Maximum absolute ecliptic latitude in degrees
+        Parameter kept for backward compatibility
     min_exposure_time : float or None
-        Minimum exposure time in seconds
+        Parameter kept for backward compatibility
         
     Returns:
     --------
-    list : Filtered observations
+    list : Same observations list (no filtering)
     """
-    logger.info(f"Starting filtering with {len(observations)} observations")
+    logger.info(f"Starting observation processing with {len(observations)} observations")
+    logger.info(f"All filtering disabled (handled by MAST query): passing all observations")
     
-    # Apply each filter in sequence
+    # Log some key stats about the data 
+    if observations and len(observations) > 0:
+        fields = list(observations[0].keys())
+        logger.info(f"Fields available in data: {', '.join(fields)}")
+    
+    # Call the filter functions but they now just pass through data
     filtered_obs = observations
     filtered_obs = filter_by_instrument(filtered_obs, include_nircam)
     filtered_obs = filter_by_wavelength(filtered_obs)
@@ -382,11 +308,11 @@ def filter_catalog(catalog_file, output_file=None, include_nircam=False,
     output_file : str or None
         Path to output filtered catalog (if None, generates default path)
     include_nircam : bool
-        Whether to include NIRCam observations
+        Whether to include NIRCam observations - kept for backward compatibility
     max_ecliptic_latitude : float
-        Maximum absolute ecliptic latitude in degrees
+        Maximum absolute ecliptic latitude in degrees - kept for backward compatibility
     min_exposure_time : float or None
-        Minimum exposure time in seconds
+        Minimum exposure time in seconds - kept for backward compatibility
     min_sequence_interval : float or None
         Minimum interval between observations in hours
     max_sequence_interval : float or None
@@ -436,7 +362,7 @@ def filter_catalog(catalog_file, output_file=None, include_nircam=False,
     
     logger.info(f"Extracted {len(observations)} observations from catalog")
     
-    # Apply filters
+    # Apply filters (now disabled - passing through all data)
     filtered_obs = filter_observations(
         observations, 
         include_nircam=include_nircam,
@@ -484,34 +410,20 @@ def filter_catalog(catalog_file, output_file=None, include_nircam=False,
 def quick_filter(observations, strict=False, include_nircam=False):
     """
     Quick filter of observations for KBO candidates with preset parameters
+    This is now disabled as filtering is handled at the MAST query level
     
     Parameters:
     -----------
     observations : list
         List of observation dictionaries
     strict : bool
-        Whether to use strict filtering parameters
+        Parameter kept for backward compatibility
     include_nircam : bool
-        Whether to include NIRCam observations
+        Parameter kept for backward compatibility
         
     Returns:
     --------
-    list : Filtered observations
+    list : Same observations list (no filtering)
     """
-    # Set parameters based on strictness
-    if strict:
-        ecliptic_latitude = 3.0  # More restrictive
-        min_exposure = 600  # Longer exposures
-    else:
-        ecliptic_latitude = 5.0  # Standard
-        min_exposure = 300  # Standard
-    
-    # Apply filters
-    filtered_obs = filter_observations(
-        observations,
-        include_nircam=include_nircam,
-        max_ecliptic_latitude=ecliptic_latitude,
-        min_exposure_time=min_exposure
-    )
-    
-    return filtered_obs
+    logger.info(f"Quick filtering disabled: passing all {len(observations)} observations")
+    return observations

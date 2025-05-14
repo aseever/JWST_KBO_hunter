@@ -202,6 +202,179 @@ def find_observation_sequences(fields, min_sequence_interval=None, max_sequence_
                 logger.warning(f"No time field found for field {field_id}, skipping sequence detection")
                 continue
             
+            # Log sample time values for debugging
+            if observations:
+                sample_time = observations[0][time_field]
+                logger.info(f"Sample time value for field {field_id}: {sample_time} (type: {type(sample_time).__name__})")
+            
+            # Get field center coordinates if available
+            field_center_ra = None
+            field_center_dec = None
+            
+            # Look for coordinate fields in first observation
+            coord_fields = [('s_ra', 's_dec'), ('ra', 'dec'), ('RA', 'DEC')]
+            
+            if observations:
+                first_obs = observations[0]
+                for ra_f, dec_f in coord_fields:
+                    if ra_f in first_obs and dec_f in first_obs:
+                        try:
+                            field_center_ra = float(first_obs[ra_f])
+                            field_center_dec = float(first_obs[dec_f])
+                            break
+                        except (ValueError, TypeError):
+                            pass
+            
+            # Sort observations by time
+            obs_with_time = []
+            for obs in observations:
+                if time_field not in obs:
+                    continue
+                    
+                try:
+                    time_value = obs[time_field]
+                    
+                    # Handle different time formats
+                    if isinstance(time_value, str):
+                        # Try ISO format first
+                        try:
+                            time_obj = Time(time_value, format='isot')
+                            time_mjd = time_obj.mjd
+                        except ValueError:
+                            # Try parsing as MJD
+                            time_mjd = float(time_value)
+                    else:
+                        # Assume it's already in MJD format
+                        time_mjd = float(time_value)
+                    
+                    obs_with_time.append((obs, time_mjd))
+                except (ValueError, TypeError) as e:
+                    # Skip observations with invalid time
+                    logger.warning(f"Error parsing time value '{time_value}': {e}")
+                    continue
+            
+            # Skip if not enough observations with valid time
+            if len(obs_with_time) < min_sequence_length:
+                continue
+                
+            # Sort by time
+            obs_with_time.sort(key=lambda x: x[1])
+            
+            # Find sequences with appropriate time intervals
+            current_sequence = [obs_with_time[0]]
+            
+            for i in range(1, len(obs_with_time)):
+                prev_obs, prev_time = current_sequence[-1]
+                current_obs, current_time = obs_with_time[i]
+                
+                # Calculate time difference in hours
+                time_diff_hours = (current_time - prev_time) * 24.0
+                
+                # Check if this observation continues the sequence
+                if min_sequence_interval <= time_diff_hours <= max_sequence_interval:
+                    current_sequence.append((current_obs, current_time))
+                else:
+                    # If sequence is long enough, save it and start a new one
+                    if len(current_sequence) >= min_sequence_length:
+                        sequence_obs = [item[0] for item in current_sequence]
+                        start_time = Time(current_sequence[0][1], format='mjd').iso
+                        end_time = Time(current_sequence[-1][1], format='mjd').iso
+                        duration_hours = (current_sequence[-1][1] - current_sequence[0][1]) * 24.0
+                        
+                        sequences.append({
+                            'field_id': field_id,
+                            'center_ra': field_center_ra,
+                            'center_dec': field_center_dec,
+                            'num_observations': len(sequence_obs),
+                            'start_time': start_time,
+                            'end_time': end_time,
+                            'duration_hours': duration_hours,
+                            'observations': sequence_obs
+                        })
+                    
+                    # Start a new sequence
+                    current_sequence = [(current_obs, current_time)]
+            
+            # Check if last sequence is valid
+            if len(current_sequence) >= min_sequence_length:
+                sequence_obs = [item[0] for item in current_sequence]
+                start_time = Time(current_sequence[0][1], format='mjd').iso
+                end_time = Time(current_sequence[-1][1], format='mjd').iso
+                duration_hours = (current_sequence[-1][1] - current_sequence[0][1]) * 24.0
+                
+                sequences.append({
+                    'field_id': field_id,
+                    'center_ra': field_center_ra,
+                    'center_dec': field_center_dec,
+                    'num_observations': len(sequence_obs),
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'duration_hours': duration_hours,
+                    'observations': sequence_obs
+                })
+        
+        # Sort sequences by number of observations (descending)
+        sequences.sort(key=lambda x: x['num_observations'], reverse=True)
+        
+        logger.info(f"Sequence identification: Found {len(sequences)} valid observation sequences")
+        if sequences:
+            logger.info(f"  - Longest sequence: {sequences[0]['num_observations']} observations over {sequences[0]['duration_hours']:.1f} hours")
+        
+        return sequences
+    
+    except Exception as e:
+        logger.error(f"Error finding observation sequences: {e}")
+        logger.exception("Stack trace:")
+        return []
+    """
+    Find sequences of observations suitable for KBO detection
+    
+    Parameters:
+    -----------
+    fields : dict
+        Dictionary mapping field_id to list of observations
+    min_sequence_interval : float or None
+        Minimum time interval between observations in hours
+    max_sequence_interval : float or None
+        Maximum time interval between observations in hours
+    min_sequence_length : int
+        Minimum number of observations in a sequence
+        
+    Returns:
+    --------
+    list : List of sequence dictionaries
+    """
+    if not fields:
+        logger.warning("No fields to find sequences in")
+        return []
+        
+    try:
+        # Use default values if not specified
+        if min_sequence_interval is None:
+            min_sequence_interval = KBO_DETECTION_CONSTANTS['MIN_SEQUENCE_INTERVAL']
+        if max_sequence_interval is None:
+            max_sequence_interval = KBO_DETECTION_CONSTANTS['MAX_SEQUENCE_INTERVAL']
+        
+        sequences = []
+        
+        # Find time field (could be 't_min', 'date_obs', etc.)
+        time_fields = ['t_min', 'date_obs', 'observation_time', 'obs_time']
+        
+        for field_id, observations in fields.items():
+            if len(observations) < min_sequence_length:
+                continue
+            
+            # Try to find a usable time field
+            time_field = None
+            for field in time_fields:
+                if observations and field in observations[0]:
+                    time_field = field
+                    break
+            
+            if not time_field:
+                logger.warning(f"No time field found for field {field_id}, skipping sequence detection")
+                continue
+            
             # Get field center coordinates if available
             field_center_ra = None
             field_center_dec = None
